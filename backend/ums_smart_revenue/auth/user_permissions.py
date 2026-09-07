@@ -74,6 +74,7 @@ if set(PERMISSION_SCOPE_TYPES) != set(Permission):
 @dataclass(frozen=True)
 class UserPermissionGrantEntry:
     """One tenant-scoped direct permission grant record."""
+
     id: str
     user_id: str
     permission_key: str
@@ -123,6 +124,7 @@ class UserPermissionGrantValidationError(UserPermissionGrantError):
 
 class SqlAlchemyUserPermissionGrantRepository:
     """PostgreSQL repository for tenant-scoped direct permission grants."""
+
     def __init__(self, session: Session, *, tenant_id: UUID | str | None = None):
         """Bind direct permission grants to an explicit or request tenant."""
         self._session = session

@@ -123,7 +123,7 @@ def _safe_error_line(exc: GoogleConnectorError) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
     try:
-        settings = load_app_settings()
+        settings = load_app_settings(validate_tenant_currency=False)
     except ValueError as exc:
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return 2

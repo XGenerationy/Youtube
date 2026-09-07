@@ -231,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     without subprocess overhead.
     """
     args = _parse_args(argv if argv is not None else sys.argv[1:])
-    settings = load_app_settings()
+    settings = load_app_settings(validate_tenant_currency=False)
     if not settings.database_url:
         # FIX: missing DB config is an operator contract error, not a downstream
         # SQLAlchemy TypeError. Keep it explicit and in the CLI's exit-2 class.

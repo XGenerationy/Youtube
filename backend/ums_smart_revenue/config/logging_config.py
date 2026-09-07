@@ -558,7 +558,6 @@ def _structured_key_kind(key: str) -> str | None:
     return None
 
 
-
 def _safe_dict_key(key: object) -> object:
     """Redact one structured-extra key to a log-safe form."""
     if isinstance(key, (int, float, bool, type(None))):

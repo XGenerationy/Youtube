@@ -1242,6 +1242,7 @@ def test_request_connector_job_activation_can_open_fresh_sqlite_session(
             self.seen_actions = []
 
         def activate(self, reservation):  # type: ignore[override]
+            """Record the reservation activation for assertions."""
             self.activate_calls.append({"reservation": reservation})
             with factory() as probe_session:
                 # Inspect the committed audit rows during reservation activation.

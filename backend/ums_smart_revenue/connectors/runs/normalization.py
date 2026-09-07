@@ -70,14 +70,17 @@ class SqlAlchemyIngestedSourceRowNormalizationAdapter:
         actor_user_id: str,
         audit_actor: UserPrincipal,
     ) -> None:
-        """Normalize one fetched report row after its run context is bound.
+        """Normalize one fetched report after its run context is bound.
 
-    Args:
-        row: Raw report row payload from the connector fetch.
-        run: Connector run providing tenant/account provenance.
+        Args:
+            report_month: Report month the fetched rows belong to.
+            run: Connector run providing tenant and account provenance.
+            actor_user_id: Actor the connector run is attributed to.
+            audit_actor: Principal recorded on the normalization audit rows.
 
-    Returns:
-        The normalized row ready for source-row upsert."""
+        Returns:
+            ``None``.
+        """
         audit_sink: AuditSink = SqlAlchemyAuditSink(self._session, tenant_id=self._tenant_id)
         try:
             if (

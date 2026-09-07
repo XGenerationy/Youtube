@@ -107,22 +107,18 @@ class UserPermissionGrantEntry:
 
 class UserPermissionGrantError(ValueError):
     """Base typed error for direct permission grant mutations."""
-    pass
 
 
 class UserPermissionGrantConflictError(UserPermissionGrantError):
     """The grant already exists (or conflicts with a pending savepoint write)."""
-    pass
 
 
 class UserPermissionGrantNotFoundError(UserPermissionGrantError):
     """No grant matches the requested tenant/user/permission/scope."""
-    pass
 
 
 class UserPermissionGrantValidationError(UserPermissionGrantError):
     """A grant field failed normalization or scope validation."""
-    pass
 
 
 class SqlAlchemyUserPermissionGrantRepository:

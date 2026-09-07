@@ -14,6 +14,7 @@ USER_ID = UUID("00000000-0000-0000-0000-000000010001")
 def auth_headers(
     role: str, scope_type: str = "global", scope_id: str | None = None
 ) -> dict[str, str]:
+    """Return trusted-gateway headers for one actor and tenant."""
     headers = {
         "x-user-id": str(USER_ID),
         "x-user-email": "raw-report-user@example.com",
@@ -27,10 +28,12 @@ def auth_headers(
 
 
 def build_database_url(tmp_path) -> str:
+    """Return the disposable SQLite URL backing these API tests."""
     return f"sqlite+pysqlite:///{(tmp_path / 'raw-report-files.db').as_posix()}"
 
 
 def seed_database(database_url: str) -> None:
+    """Seed one disposable database for the scenario under test."""
     engine = create_engine(database_url)
     SecurityBase.metadata.create_all(engine)
     ReportBase.metadata.create_all(engine)

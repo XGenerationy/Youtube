@@ -165,14 +165,27 @@ def require_migration_security_floor(
     """
     if len(migration_heads) != 1:
         raise BackupToolError("backup must contain exactly one Alembic head", exit_code=8)
+    stored_head = migration_heads[0]
     config_path = repository_root / "alembic.ini"
     script_location = repository_root / "backend" / "ums_smart_revenue" / "db" / "alembic"
     try:
         config = Config(str(config_path))
         config.set_main_option("script_location", str(script_location))
+        revision_map = ScriptDirectory.from_config(config).revision_map
+        # FIX: iterate_revisions() accepts Alembic selectors (heads, branch
+        # names, abbreviated ids), so a corrupted or hand-stamped
+        # alembic_version value could pass the lineage check without being a
+        # real applied revision. Resolve the selector and require the stored
+        # string to equal the canonical revision id.
+        resolved = tuple(revision_map.iterate_revisions(stored_head, None))
+        if not resolved or resolved[0].revision != stored_head:
+            raise BackupToolError(
+                "backup Alembic head is not a canonical revision identifier",
+                exit_code=8,
+            )
         revisions = tuple(
-            ScriptDirectory.from_config(config).revision_map.iterate_revisions(
-                migration_heads[0],
+            revision_map.iterate_revisions(
+                stored_head,
                 MINIMUM_SECURITY_REVISION,
                 inclusive=True,
             )

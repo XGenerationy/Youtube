@@ -934,6 +934,10 @@ def _lock_export_relations(connection: Connection[tuple[object, ...]]) -> None:
     # TRUNCATE/DDL. Acquiring it before the first SELECT closes PostgreSQL's
     # non-MVCC TRUNCATE gap; per-relation ACCESS SHARE then documents and holds
     # the ordinary pg_dump compatibility lock explicitly.
+    # FIX: a stale session holding DDL/TRUNCATE locks previously made this
+    # blocking LOCK wait forever (while the backup held its output lock);
+    # a bounded lock_timeout turns the wait into the normal quiescence refusal.
+    connection.execute("SET LOCAL lock_timeout = '30s'")
     connection.execute("LOCK TABLE pg_catalog.pg_class IN SHARE MODE")
     relations = _table_names(connection)
     if relations:
@@ -1817,6 +1821,15 @@ def snapshot_source_record(
     if len(migration_heads) != len(migration_rows) or len(migration_heads) != 1:
         raise BackupToolError(
             "source must have exactly one readable Alembic head before backup",
+            exit_code=4,
+        )
+    # FIX: the restore and rehearsal paths pin the PostgreSQL 18 predefined-role
+    # catalog, so a backup from any other major could never pass the mandatory
+    # rehearsal; refuse it at capture instead of publishing unusable evidence.
+    if row[3] // 10000 != 18:
+        raise BackupToolError(
+            "backup sources are supported only on PostgreSQL 18; the restore "
+            "and rehearsal gates pin that major's clean-cluster fingerprint",
             exit_code=4,
         )
     return SourceRecord(

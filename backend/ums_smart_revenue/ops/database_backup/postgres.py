@@ -1905,6 +1905,11 @@ def dump_snapshot(
         [
             "docker",
             "exec",
+            "-e", "PGHOST=",
+            "-e", "PGHOSTADDR=",
+            "-e", "PGSERVICE=",
+            "-e", "PGPASSWORD=",
+            "-e", "PGDATABASE=",
             source.container,
             "pg_dump",
             "--format=custom",
@@ -1933,7 +1938,19 @@ def dump_toc_entries(runner: CommandRunner, container: str, dump_source: Path | 
     Raises:
         BackupToolError: pg_restore lists no archive entries.
     """
-    argv = ["docker", "exec", "-i", container, "pg_restore", "--list"]
+    argv = [
+        "docker",
+        "exec",
+        "-i",
+        "-e", "PGHOST=",
+        "-e", "PGHOSTADDR=",
+        "-e", "PGSERVICE=",
+        "-e", "PGPASSWORD=",
+        "-e", "PGDATABASE=",
+        container,
+        "pg_restore",
+        "--list",
+    ]
     if isinstance(dump_source, Path):
         listing = runner.file_to_text(argv, dump_source, exit_code=6)
     else:
@@ -2016,6 +2033,11 @@ def apply_sql_file(
         "docker",
         "exec",
         "-i",
+        "-e", "PGHOST=",
+        "-e", "PGHOSTADDR=",
+        "-e", "PGSERVICE=",
+        "-e", "PGPASSWORD=",
+        "-e", "PGDATABASE=",
         container,
         "psql",
         "--no-psqlrc",
@@ -2061,6 +2083,11 @@ def restore_dump(
         "docker",
         "exec",
         "-i",
+        "-e", "PGHOST=",
+        "-e", "PGHOSTADDR=",
+        "-e", "PGSERVICE=",
+        "-e", "PGPASSWORD=",
+        "-e", "PGDATABASE=",
         container,
         "pg_restore",
         "--exit-on-error",

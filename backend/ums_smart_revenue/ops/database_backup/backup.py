@@ -97,7 +97,17 @@ def _content_floor(table_counts: dict[str, int]) -> dict[str, int]:
             f"database seed floor is incomplete (missing={missing}, empty={empty})",
             exit_code=8,
         )
-    application_rows = sum(count for name, count in table_counts.items() if name not in SEED_TABLES)
+    # FIX: public.app_tenant_context is runtime session state written by the
+    # tenant-session hook, not application data — one tenant-scoped request
+    # before backup leaves a persistent row there that only a later
+    # non-tenant transaction clears, so counting it published empty-install
+    # backups as recovery evidence.
+    session_state_tables = {"public.app_tenant_context"}
+    application_rows = sum(
+        count
+        for name, count in table_counts.items()
+        if name not in SEED_TABLES and name not in session_state_tables
+    )
     if application_rows < 1:
         raise BackupToolError(
             "database has no rows outside the migration seed tables; refusing to publish an "

@@ -105,6 +105,11 @@ continues after an unexpected failure:
 - `ConnectorJobExecutor` worker boundary.
 - `GroupSyncScheduler` tick boundary.
 - Celery task boundary when a task catches rather than re-raises.
+  Owner: deferred. No Celery application or task module exists in this
+  repository yet (background work runs in `ConnectorJobExecutor` and
+  `GroupSyncScheduler`); this bullet is the pre-agreed contract for the
+  PR that first introduces Celery, and that PR owns wiring the capture
+  and updating this section.
 - Lifespan shutdown failures after safe redaction.
 
 Do not capture typed business, authorization, validation, or conflict errors

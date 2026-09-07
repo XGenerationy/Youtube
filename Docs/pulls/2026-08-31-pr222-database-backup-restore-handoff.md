@@ -178,3 +178,20 @@ Rollback is code-only. Revert these files; do not delete already published
 backup packages or coordinated bundles. They are operator data, not build
 artifacts. Never pair a PR #222 code rollback with an Alembic downgrade below
 `20260825_0002`.
+
+
+## Follow-up hardening queue (recorded 2026-09-03, post-review)
+
+These three items are deliberate deferrals from the cleanup waves, each needing
+design work on a #221-surface rather than a rushed change here:
+
+1. Private verified staging for restore: copy each verified artifact into the
+   staging area and re-hash before replay, closing the same-inode in-place
+   write window that open-time verification cannot cover.
+2. Storage attestation bridge: accept the #221 launcher's bind sentinel
+   (.ums-smart-revenue-storage) as proof for the dedicated-root check — or ship
+   an explicit, safe migration between the two markers — so launcher-provisioned
+   production binds can be backed up without a manual re-prepare.
+3. Launcher unification: retire compose_storage.py's `compose` subcommand and
+   make scripts/compose.py the single documented lifecycle entry point, so
+   operators cannot bypass the child-provisioning and image-pinning path.

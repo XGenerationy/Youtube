@@ -150,7 +150,7 @@ def test_cli_main_returns_2_when_database_url_missing(
     class _StubSettings:
         database_url = None
 
-    def _load_stub_settings() -> _StubSettings:
+    def _load_stub_settings(**_kwargs) -> _StubSettings:
         return _StubSettings()
 
     def _build_session_factory_should_not_run(_url: str):
@@ -232,7 +232,7 @@ def _patch_cli_runtime(module, monkeypatch: pytest.MonkeyPatch, db_session: Sess
     class _StubSettings:
         database_url = "sqlite+pysqlite:///:memory:"
 
-    def _load_stub_settings() -> _StubSettings:
+    def _load_stub_settings(**_kwargs) -> _StubSettings:
         return _StubSettings()
 
     def _fake_factory() -> _SessionCtx:
@@ -311,7 +311,7 @@ def test_cli_main_returns_2_when_credential_missing(
     class _StubSettings:
         database_url = "sqlite+pysqlite:///:memory:"
 
-    def _load_stub_settings() -> _StubSettings:
+    def _load_stub_settings(**_kwargs) -> _StubSettings:
         return _StubSettings()
 
     def _build_fake_session_factory(_url: str):
@@ -536,7 +536,7 @@ def test_cli_main_returns_2_when_tenant_lifecycle_rejected(
     class _StubSettings:
         database_url = "sqlite+pysqlite:///:memory:"
 
-    def _load_stub_settings() -> _StubSettings:
+    def _load_stub_settings(**_kwargs) -> _StubSettings:
         return _StubSettings()
 
     def _build_fake_session_factory(_url: str):

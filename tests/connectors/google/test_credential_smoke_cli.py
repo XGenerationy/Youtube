@@ -122,7 +122,7 @@ def _patch_settings_and_session(
     class _StubSettings:
         database_url = "sqlite+pysqlite://"
 
-    def _load_settings() -> _StubSettings:
+    def _load_settings(**_kwargs) -> _StubSettings:
         return _StubSettings()
 
     def _build_factory(_url: str):
@@ -167,7 +167,7 @@ def test_credential_smoke_returns_2_when_database_url_missing(
     class _StubSettings:
         database_url = ""
 
-    def _load_empty_settings() -> _StubSettings:
+    def _load_empty_settings(**_kwargs) -> _StubSettings:
         return _StubSettings()
 
     monkeypatch.setattr(module, "load_app_settings", _load_empty_settings)

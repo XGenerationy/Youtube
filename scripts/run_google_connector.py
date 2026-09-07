@@ -184,6 +184,7 @@ def _enforce_live_credential_smoke(
     connector_key: str,
     account_id: str,
 ) -> None:
+    """Refuse a live connector run whose credential never passed its smoke."""
     repository = SqlAlchemyConnectorCredentialRepository(session, tenant_id=tenant_id)
     credential = None
     for candidate_key in credential_key_candidates(connector_key):

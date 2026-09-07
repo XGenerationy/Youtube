@@ -16,6 +16,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_backend_dependencies_are_pinned_to_checked_latest_stable_versions():
+def test_backend_dependencies_are_pinned_to_checked_latest_stable_versions():
+    """Pin the exact backend dependency set the reviewed baselines document."""
     pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = set(pyproject["project"]["dependencies"])
     test_dependencies = set(pyproject["project"]["optional-dependencies"]["test"])
@@ -53,6 +55,8 @@ def test_backend_dependencies_are_pinned_to_checked_latest_stable_versions():
 
 
 def test_stack_version_baseline_records_runtime_and_frontend_targets():
+def test_stack_version_baseline_records_runtime_and_frontend_targets():
+    """Pin the runtime, backend, datastore, and frontend baseline targets."""
     assert STACK_VERSION_BASELINE["runtime"]["python"] == "3.14.5"
     assert STACK_VERSION_BASELINE["runtime"]["node_lts"] == "24.15.0"
     assert STACK_VERSION_BASELINE["backend"]["fastapi"] == "0.141.1"

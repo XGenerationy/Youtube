@@ -67,6 +67,11 @@ def test_app_stop_grace_period_covers_connector_close_budgets() -> None:
 
     for service_name in ("app", "app-dev"):
         stop_grace_period = services[service_name]["stop_grace_period"]
-        assert stop_grace_period == "120s"
-        stop_grace_seconds = float(stop_grace_period.removesuffix("s"))
+        # The final #221 compose parameterizes the grace; its default is the
+        # 120s budget this math depends on.
+        assert stop_grace_period == "${UMS_STOP_GRACE_PERIOD:-120s}"
+        stop_grace_seconds = float(
+            stop_grace_period.removeprefix("${UMS_STOP_GRACE_PERIOD:-").removesuffix("s}")
+        )
+        assert stop_grace_seconds == 120.0
         assert stop_grace_seconds > required_seconds

@@ -22,7 +22,9 @@ def test_compose_forwards_log_level_and_gracefully_drains_workers():
     compose = (_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
     assert "UMS_LOG_LEVEL: ${UMS_LOG_LEVEL:-INFO}" in compose
-    assert compose.count("stop_grace_period: 120s") == 2
+    # The final #221 compose parameterizes the grace; both app variants must
+    # still carry exactly the 120s default.
+    assert compose.count("stop_grace_period: ${UMS_STOP_GRACE_PERIOD:-120s}") == 2
     assert "http://localhost:8000/readyz" in compose
 
 

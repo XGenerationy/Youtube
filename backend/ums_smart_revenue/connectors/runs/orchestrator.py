@@ -88,9 +88,6 @@ from ums_smart_revenue.auth.audit_service import AuditSink
 from ums_smart_revenue.auth.models import UserPrincipal
 from ums_smart_revenue.auth.sql_audit_sink import SqlAlchemyAuditSink
 from ums_smart_revenue.config.logging_config import redact_exception_summary
-from ums_smart_revenue.config.settings import (
-    GOOGLE_CONNECTOR_SERVICE_ACTOR_ID_ENV,
-)
 from ums_smart_revenue.connectors.google.adsense_management_client import (
     AdSenseManagementClient,
 )

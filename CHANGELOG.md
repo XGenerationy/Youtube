@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Production Sentry observability design (exception capture policy,
+  PII redaction, release health, and alert routing) in
+  `Docs/superpowers/specs/2026-09-02-sentry-observability-design.md`.
+  Documentation only — no runtime wiring in this PR.
+
 ### Breaking changes
 - Compose deployments now use a dedicated, launcher-provisioned host storage
   tree (default `./data/ums`) with `artifacts/` and `blobs/` children that

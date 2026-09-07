@@ -110,6 +110,8 @@ def engine() -> Iterator[Engine]:
 def _session_context_factory(db_engine: Engine) -> type:
     """Helper for the session context factory scenario."""
     class _SessionCtx:
+        """Connection-context stub whose cursor answers one canned row."""
+
         def __enter__(self) -> Session:
             """Helper for the enter scenario."""
             self._session = Session(db_engine)
@@ -128,6 +130,7 @@ def _patch_settings_and_session(
     """Helper for the patch settings and session scenario."""
     class _StubSettings:
         """Settings double carrying only the fields the CLI reads."""
+
         database_url = "sqlite+pysqlite://"
 
     def _load_settings(**_kwargs) -> _StubSettings:
@@ -143,6 +146,8 @@ def _patch_settings_and_session(
 
 
 class _RaiseOnTenantEnterCtx:
+    """Connection context that raises on tenant set, proving fail-closed."""
+
     def __enter__(self) -> None:
         """Helper for the enter scenario."""
         raise TenantLifecycleError(tenant_id=TENANT_ID, status="SUSPENDED")
@@ -181,6 +186,7 @@ def test_credential_smoke_returns_2_when_database_url_missing(
 
     class _StubSettings:
         """Settings double carrying only the fields the CLI reads."""
+
         database_url = ""
 
     def _load_empty_settings(**_kwargs) -> _StubSettings:

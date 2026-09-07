@@ -150,6 +150,7 @@ def test_cli_main_returns_2_when_database_url_missing(
 
     class _StubSettings:
         """Settings double carrying only the fields the CLI reads."""
+
         database_url = None
 
     def _load_stub_settings(**_kwargs) -> _StubSettings:
@@ -222,6 +223,8 @@ def session() -> Generator[Session]:
 
 
 class _SessionCtx:
+    """Connection-context stub whose cursor answers one canned row."""
+
     def __init__(self, db_session: Session) -> None:
         """Helper for the init scenario."""
         self._session = db_session
@@ -239,6 +242,7 @@ def _patch_cli_runtime(module, monkeypatch: pytest.MonkeyPatch, db_session: Sess
     """Helper for the patch cli runtime scenario."""
     class _StubSettings:
         """Settings double carrying only the fields the CLI reads."""
+
         database_url = "sqlite+pysqlite:///:memory:"
 
     def _load_stub_settings(**_kwargs) -> _StubSettings:
@@ -300,6 +304,8 @@ def test_cli_main_returns_2_when_credential_missing(
     module = _load_cli_module()
 
     class _SessionCtx:
+        """Connection-context stub whose cursor answers one canned row."""
+
         def __init__(self, db_session: Session) -> None:
             """Helper for the init scenario."""
             self._session = db_session
@@ -327,6 +333,7 @@ def test_cli_main_returns_2_when_credential_missing(
     # session context manager the CLI calls via ``with factory() as ...``).
     class _StubSettings:
         """Settings double carrying only the fields the CLI reads."""
+
         database_url = "sqlite+pysqlite:///:memory:"
 
     def _load_stub_settings(**_kwargs) -> _StubSettings:
@@ -489,9 +496,13 @@ def test_cli_main_allows_live_after_successful_credential_smoke(
     calls: list[dict[str, object]] = []
 
     class _Run:
+        """Connector-run row stub carrying only the fields the CLI prints."""
+
         status = "SUCCEEDED"
 
     class _Outcome:
+        """Outcome stub pairing a run with its recorded submission result."""
+
         run = _Run()
         counts = {"reports_seen": 0}
         per_report_failures: list[object] = []
@@ -549,6 +560,8 @@ def test_cli_main_returns_2_when_tenant_lifecycle_rejected(
     module = _load_cli_module()
 
     class _SessionCtx:
+        """Connection-context stub whose cursor answers one canned row."""
+
         def __init__(self, db_session: Session) -> None:
             """Helper for the init scenario."""
             self._session = db_session
@@ -567,6 +580,7 @@ def test_cli_main_returns_2_when_tenant_lifecycle_rejected(
 
     class _StubSettings:
         """Settings double carrying only the fields the CLI reads."""
+
         database_url = "sqlite+pysqlite:///:memory:"
 
     def _load_stub_settings(**_kwargs) -> _StubSettings:

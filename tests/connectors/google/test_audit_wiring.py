@@ -32,8 +32,8 @@ from ums_smart_revenue.auth.audit_service import InMemoryAuditSink
 from ums_smart_revenue.auth.permissions import Permission
 from ums_smart_revenue.config.settings import (
     GOOGLE_CONNECTOR_SERVICE_ACTOR_ID_ENV,
-    TENANT_PRIMARY_CURRENCY_ENV,
     GOOGLE_CONNECTOR_SERVICE_ACTOR_PLACEHOLDER_ID,
+    TENANT_PRIMARY_CURRENCY_ENV,
 )
 from ums_smart_revenue.connectors.google.audit import (
     build_connector_service_principal,

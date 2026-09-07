@@ -34,8 +34,8 @@ from ums_smart_revenue.auth.roles import RoleKey
 from ums_smart_revenue.auth.scopes import AccessScope
 from ums_smart_revenue.config.settings import (
     AUTHZ_SOURCE_ENV,
-    TENANT_PRIMARY_CURRENCY_ENV,
     GOOGLE_CONNECTOR_SERVICE_ACTOR_PLACEHOLDER_ID,
+    TENANT_PRIMARY_CURRENCY_ENV,
     load_app_settings,
 )
 from ums_smart_revenue.connectors.credentials import (
@@ -141,13 +141,6 @@ class _FakeExecutor:
         self.closed = False
 
     def has_active_job(self, **kwargs) -> bool:
-        """Return the preset active flag."""
-        return self.active
-
-    def submit_if_absent(self, **kwargs):
-        """Record the call and mimic the atomic duplicate check."""
-        # Record the call and mimic the atomic check: if ``active`` is set
-        # the route receives None and falls into the duplicate path.
         """Return the configured active flag, ignoring the query filters."""
         return self.active
 
@@ -164,11 +157,6 @@ class _FakeExecutor:
 
     def activate(self, reservation):
         """Record the reservation activation."""
-        self.activate_calls.append({"reservation": reservation})
-
-    def cancel_reservation(self, reservation):
-        """Record and accept the reservation cancellation."""
-        """Record an activation of the reserved slot."""
         self.activate_calls.append({"reservation": reservation})
 
     def cancel_reservation(self, reservation):

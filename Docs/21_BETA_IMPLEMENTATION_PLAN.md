@@ -10,8 +10,10 @@ breaks, what it unblocks — not estimated from the finding text.
 > ⚠️ **Freshness banner (2026-08-31, post-audit).** P0 **implementation** is tracked by
 > current successor PRs **#221–#225 (P0-a…P0-e)**. PR #210 is historical: it merged on
 > 2026-08-29 into the non-main `docs/deployment-readiness-audit` branch and is not the
-> source of truth on `main`. At this check, #221 and #225 are open/BLOCKED, while
-> #222–#224 are open/BEHIND; none is merged. This copy remains the
+> source of truth on `main`. Update 2026-09-03: #221 (P0-a compose storage)
+> has MERGED into `main`; #222 (P0-b backup/restore) is fully green and
+> awaiting merge; #223/#224 remain open drafts and #225 open. Re-check live
+> PR states before scheduling. This copy remains the
 > **costing snapshot** at `main` = `d8418cea2`. Do not schedule open items from the
 > hour tables alone until the successor PRs land on `main`.
 >

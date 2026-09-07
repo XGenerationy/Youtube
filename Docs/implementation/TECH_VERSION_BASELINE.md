@@ -27,11 +27,11 @@ For this project:
 | Package | Version |
 |---|---:|
 | FastAPI | `0.136.1` |
-| Pydantic | `2.13.4` |
+| Pydantic | `2.13.5` |
 | Uvicorn | `0.47.0` |
 | SQLAlchemy | `2.0.49` |
 | Alembic | `1.18.4` |
-| psycopg | `3.3.4` |
+| psycopg | `3.3.5` |
 | Celery | `5.6.3` |
 | Redis Python client | `7.4.0` |
 | openpyxl | `3.1.5` |

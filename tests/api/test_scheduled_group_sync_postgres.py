@@ -317,6 +317,7 @@ def resolves_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     """
 
     def _resolver(**_kwargs: object) -> object:
+        """Resolve canned group rows for the scheduler under test."""
         return object()
 
     assert run_group_sync.__kwdefaults__ is not None
@@ -351,6 +352,7 @@ def _record_activations(executor: ConnectorJobExecutor) -> list[Future]:
     real_activate = executor.activate
 
     def _recording(reservation: object) -> Future:
+        """Record one scheduler tick's arguments for assertions."""
         future = real_activate(reservation)  # type: ignore[arg-type]
         activated.append(future)
         return future

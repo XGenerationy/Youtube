@@ -39,6 +39,15 @@ from ums_smart_revenue.tenancy.constants import UMS_TENANT_ID
 from ums_smart_revenue.tenancy.context import get_current_tenant
 from ums_smart_revenue.tenancy.models import TenantStatus
 
+
+def _exactly_one(items):
+    """Return the one expected item; a dry iterator fails the test."""
+    try:
+        return next(items)
+    except StopIteration as exc:
+        raise AssertionError("expected one more canned item; got none") from exc
+
+
 TENANT = UUID(UMS_TENANT_ID)
 ACTOR = ConnectorJobActor(user_id=str(uuid4()), email="ops@example.com")
 
@@ -945,7 +954,9 @@ def test_abandoned_durable_intent_recovers_exactly_once(tmp_path) -> None:
     actions = [row.details["action"] for row in rows]
     assert len(actions) == 2
     assert set(actions) == {"job_submitted", "job_failed_before_start"}
-    failure = next(row for row in rows if row.details["action"] == "job_failed_before_start")
+    failure = _exactly_one(
+        row for row in rows if row.details["action"] == "job_failed_before_start"
+    )
     assert failure.details["error_class"] == "ExecutorShutdownRecovery"
 
 

@@ -200,6 +200,7 @@ def resolves_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     """
 
     def _resolver(**_kwargs: object) -> object:
+        """Resolve canned group rows for the scheduler under test."""
         return object()
 
     assert run_group_sync.__kwdefaults__ is not None
@@ -360,6 +361,7 @@ def test_worker_rolls_back_domain_and_audit_together_on_summary_failure(
     )
 
     def _boom_on_summary(*, event_type: AuditEventType, **kwargs: object) -> object:
+        """Raise on summary to prove the failure path records cleanly."""
         if event_type is AuditEventType.GROUPS_SYNCED:
             raise RuntimeError("summary audit boom")
         return _real_record(event_type=event_type, **kwargs)  # type: ignore[arg-type]
@@ -581,6 +583,7 @@ def test_close_audits_queued_sync_job_with_before_start_row(
     started = threading.Event()
 
     def _slow_run_one(session: object, **kwargs: object) -> ConnectorRunOutcome:
+        """Block long enough to trigger the timeout path."""
         started.set()
         time.sleep(0.5)
         return ConnectorRunOutcome(run=None, counts={}, per_report_failures=[])

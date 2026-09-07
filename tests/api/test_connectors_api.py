@@ -66,6 +66,15 @@ from ums_smart_revenue.db.security_models import (
 from ums_smart_revenue.db.session import build_session_factory
 from ums_smart_revenue.tenancy.constants import UMS_TENANT_ID
 
+
+def _exactly_one(items):
+    """Return the one expected item; a dry iterator fails the test."""
+    try:
+        return next(items)
+    except StopIteration as exc:
+        raise AssertionError("expected one more canned item; got none") from exc
+
+
 USER_ID = UUID("00000000-0000-0000-0000-000000004001")
 SERVICE_ACTOR_ID = UUID("00000000-0000-0000-0000-0000000000aa")
 
@@ -1208,7 +1217,9 @@ def test_request_connector_job_activation_failure_persists_with_real_sqlite_exec
     request_ids = {row.request_id for row in rows}
     assert None not in request_ids
     assert len(request_ids) == 1
-    failure = next(row for row in rows if row.details["action"] == "job_failed_before_start")
+    failure = _exactly_one(
+        row for row in rows if row.details["action"] == "job_failed_before_start"
+    )
     assert failure.details["error_class"] == "RuntimeError"
 
 
@@ -1233,7 +1244,7 @@ def test_request_connector_job_activation_can_open_fresh_sqlite_session(
         def activate(self, reservation):  # type: ignore[override]
             self.activate_calls.append({"reservation": reservation})
             with factory() as probe_session:
-                """Inspect the committed audit rows during reservation activation."""
+                # Inspect the committed audit rows during reservation activation.
                 rows = probe_session.scalars(
                     select(AuditLogORM).where(AuditLogORM.request_id == str(reservation.job_id))
                 ).all()

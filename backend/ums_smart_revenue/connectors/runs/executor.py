@@ -803,8 +803,8 @@ class ConnectorJobExecutor:
         )
         return True
 
+    @staticmethod
     def _lock_job_lifecycle_actions(
-        self,
         *,
         session: Session,
         tenant_id: UUID,

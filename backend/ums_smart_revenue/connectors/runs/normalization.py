@@ -39,6 +39,7 @@ class SqlAlchemyIngestedSourceRowNormalizationAdapter:
         *,
         tenant_id: UUID,
     ) -> None:
+        """Init."""
         self._session = session
         self._tenant_id = tenant_id
 
@@ -69,6 +70,14 @@ class SqlAlchemyIngestedSourceRowNormalizationAdapter:
         actor_user_id: str,
         audit_actor: UserPrincipal,
     ) -> None:
+        """Normalize one fetched report row after its run context is bound.
+
+    Args:
+        row: Raw report row payload from the connector fetch.
+        run: Connector run providing tenant/account provenance.
+
+    Returns:
+        The normalized row ready for source-row upsert."""
         audit_sink: AuditSink = SqlAlchemyAuditSink(self._session, tenant_id=self._tenant_id)
         try:
             if (

@@ -558,6 +558,24 @@ def _structured_key_kind(key: str) -> str | None:
     return None
 
 
+
+def _safe_dict_key(key: object) -> object:
+    """Redact one structured-extra key to a log-safe form."""
+    if isinstance(key, (int, float, bool, type(None))):
+        return key
+    return _redact_log_text(key)
+
+
+def _redacted_for_key(key: object, nested: object) -> object:
+    """Redact one structured-extra value under its key's sensitivity class."""
+    key_kind = _structured_key_kind(key) if isinstance(key, str) else None
+    if key_kind == "secret":
+        return _REDACTED
+    if key_kind == "sql":
+        return "[REDACTED-SQL]"
+    return _redact_structured_value(nested)
+
+
 def _redact_structured_value(value: object) -> object:
     """Recursively sanitize values carried by structured ``extra`` fields."""
     if isinstance(value, str):
@@ -565,23 +583,10 @@ def _redact_structured_value(value: object) -> object:
     if isinstance(value, BaseException):
         return redact_exception_summary(value)
     if isinstance(value, dict):
-        sanitized: dict[object, object] = {}
-        for key, nested in value.items():
-            key_kind = _structured_key_kind(key) if isinstance(key, str) else None
-            safe_key: object
-            if isinstance(key, str):
-                safe_key = _redact_log_text(key)
-            elif isinstance(key, (int, float, bool, type(None))):
-                safe_key = key
-            else:
-                safe_key = _redact_log_text(key)
-            if key_kind == "secret":
-                sanitized[safe_key] = _REDACTED
-            elif key_kind == "sql":
-                sanitized[safe_key] = "[REDACTED-SQL]"
-            else:
-                sanitized[safe_key] = _redact_structured_value(nested)
-        return sanitized
+        return {
+            _safe_dict_key(key): _redacted_for_key(key, nested)
+            for key, nested in value.items()
+        }
     if isinstance(value, list):
         return [_redact_structured_value(nested) for nested in value]
     if isinstance(value, tuple):

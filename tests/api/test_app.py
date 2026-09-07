@@ -7,6 +7,7 @@ from ums_smart_revenue.config.version_baseline import STACK_VERSION_BASELINE
 
 
 def test_health_exposes_latest_stable_backend_baseline():
+    """Health reports the latest stable backend baseline."""
     client = TestClient(create_app())
 
     response = client.get("/health")
@@ -24,6 +25,7 @@ def test_health_exposes_latest_stable_backend_baseline():
 
 
 def test_livez_exposes_runtime_health_contract():
+    """Liveness reports the runtime health contract."""
     client = TestClient(create_app())
 
     response = client.get("/livez")

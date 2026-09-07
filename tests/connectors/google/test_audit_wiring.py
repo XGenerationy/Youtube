@@ -33,6 +33,7 @@ from ums_smart_revenue.auth.permissions import Permission
 from ums_smart_revenue.config.settings import (
     GOOGLE_CONNECTOR_SERVICE_ACTOR_ID_ENV,
     TENANT_PRIMARY_CURRENCY_ENV,
+    GOOGLE_CONNECTOR_SERVICE_ACTOR_PLACEHOLDER_ID,
 )
 from ums_smart_revenue.connectors.google.audit import (
     build_connector_service_principal,
@@ -41,6 +42,10 @@ from ums_smart_revenue.connectors.google.audit import (
     emit_raw_file_parsed,
     emit_run_finished,
     emit_run_started,
+)
+from ums_smart_revenue.connectors.google.errors import (
+    ConnectorServicePrincipalUnavailableError,
+    GoogleConnectorError,
 )
 
 _TENANT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -114,10 +119,18 @@ def test_build_service_principal_carries_run_connector_jobs(
 def test_build_service_principal_requires_actor_id_setting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No env value -> the builder raises a clear error mentioning the env name."""
+    """No env value -> the typed Bucket-A failure names the env var.
+
+    The builder raises ``ConnectorServicePrincipalUnavailableError`` directly
+    (a ``GoogleConnectorError``), so every caller — including the direct
+    normalization caller that has no wrapper — gets the classified pre-start
+    failure family instead of an untyped ``ValueError``.
+    """
     monkeypatch.delenv(GOOGLE_CONNECTOR_SERVICE_ACTOR_ID_ENV, raising=False)
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ConnectorServicePrincipalUnavailableError) as excinfo:
         build_connector_service_principal(tenant_id=_TENANT_ID)
+    assert isinstance(excinfo.value, GoogleConnectorError)
+    assert excinfo.value.env_var == GOOGLE_CONNECTOR_SERVICE_ACTOR_ID_ENV
     message = str(excinfo.value)
     assert GOOGLE_CONNECTOR_SERVICE_ACTOR_ID_ENV in message
 
@@ -133,6 +146,28 @@ def test_build_service_principal_defers_unrelated_currency_validation(
 
     assert principal.user_id == configured_service_actor
     assert principal.tenant_id == str(_TENANT_ID)
+def test_build_service_principal_rejects_template_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The .env.example placeholder UUID is refused, never silently attributed.
+
+    The template ships the placeholder UNCOMMENTED, so a ``cp .env.example
+    .env`` deployment reaches the builder with this exact value. Accepting it
+    would attribute every connector-emitted audit row to a UUID published in
+    a public template; the builder must fail closed, name the placeholder,
+    and raise the same typed Bucket-A family as the unset case.
+    """
+    monkeypatch.setenv(
+        GOOGLE_CONNECTOR_SERVICE_ACTOR_ID_ENV,
+        GOOGLE_CONNECTOR_SERVICE_ACTOR_PLACEHOLDER_ID,
+    )
+    with pytest.raises(ConnectorServicePrincipalUnavailableError) as excinfo:
+        build_connector_service_principal(tenant_id=_TENANT_ID)
+    assert isinstance(excinfo.value, GoogleConnectorError)
+    assert excinfo.value.env_var == GOOGLE_CONNECTOR_SERVICE_ACTOR_ID_ENV
+    message = str(excinfo.value)
+    assert GOOGLE_CONNECTOR_SERVICE_ACTOR_ID_ENV in message
+    assert GOOGLE_CONNECTOR_SERVICE_ACTOR_PLACEHOLDER_ID in message
 
 
 # ---------------------------------------------------------------------------

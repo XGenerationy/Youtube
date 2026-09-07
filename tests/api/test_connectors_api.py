@@ -198,7 +198,6 @@ def _seed_active_credential(
     credential_smoked: bool = True,
     token_expiry_at: datetime | None = None,
 ):
-    """Insert one credential row with the given smoke status and expiry."""
     """Seed one youtube_reporting credential row for the content-owner-1 account."""
     engine = create_engine(database_url)
     # The jobs route reads connector_runs for the dup/orphan guard; ensure the
@@ -487,7 +486,6 @@ def test_connector_job_runtime_ignores_currency_changed_after_headers_app_start(
 
 
 def test_request_connector_job_live_requires_successful_credential_smoke(tmp_path):
-    """A live job request requires a successful credential smoke before dispatch."""
     """A live submission for an account whose credential smoke never succeeded is rejected 422."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
@@ -521,7 +519,6 @@ def test_request_connector_job_live_requires_successful_credential_smoke(tmp_pat
 
 
 def test_request_connector_job_live_requires_unexpired_credential_smoke(tmp_path):
-    """A live job request requires an unexpired credential smoke before dispatch."""
     """A smoke that succeeded but whose token already expired is rejected 422."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
@@ -1014,7 +1011,6 @@ def test_request_connector_job_after_rollback_cancels_reservation(tmp_path, monk
     # Patch _supersede_or_block_running_runs to raise so the request
     # session rolls back via FastAPI's session_dependency wrapper.
     def _explode(*_args, **_kwargs):
-        """Raise on any call, simulating a DB failure during the supersede check."""
         """Simulate a mid-request DB failure inside the supersede check."""
         raise RuntimeError("simulated DB failure during supersede check")
 
@@ -1067,7 +1063,6 @@ def test_request_connector_job_activate_failure_writes_bucket_a_audit(
         """Fake executor whose activate() raises to simulate shutdown."""
 
         def activate(self, reservation):  # type: ignore[override]
-            """Record the activation, then raise: shutdown is rejecting new work."""
             """Record the activation, then simulate a shutdown rejection."""
             self.activate_calls.append({"reservation": reservation})
             raise RuntimeError("simulated shutdown rejecting new work")
@@ -1080,9 +1075,7 @@ def test_request_connector_job_activate_failure_writes_bucket_a_audit(
     # _FakeExecutor doesn't ship with that method, so install a passthrough.
 
     def _noop(*_args, **_kwargs):
-        """Absorb any call; used to neuter audit recording in failure paths."""
         """Passthrough standing in for the audit hook the fake lacks."""
-        return None
 
     real_audit = _ActivateFailExecutor.__dict__.get("_audit_failed_before_start")
     if real_audit is None:
@@ -1800,7 +1793,6 @@ def test_credential_health_returns_telemetry_and_state_for_viewer(tmp_path):
 
 
 class _TenantRecordingHealthRepository:
-    """Fake health repository recording the tenant binding it was asked for."""
     """Health-repository stub recording the tenant binding it was asked for."""
 
     def __init__(self) -> None:
@@ -1808,7 +1800,6 @@ class _TenantRecordingHealthRepository:
         self.connector_keys: frozenset[str] | None = None
 
     def for_tenant(self, tenant_id: UUID | str) -> Self:
-        """Bind the fake to a tenant id, recording the binding for assertions."""
         """Bind the stub to a tenant and return it for chaining."""
         self.bound_tenant_id = tenant_id
         return self
@@ -1820,7 +1811,6 @@ class _TenantRecordingHealthRepository:
         offset: int = 0,
         connector_keys: frozenset[str] | None = None,
     ) -> ConnectorCredentialPage:
-        """Return the seeded credential rows; filters are accepted and ignored."""
         """Record the connector-key filter and return a one-entry page.
 
         The single ``acct-other`` entry is the fixture the caller asserts

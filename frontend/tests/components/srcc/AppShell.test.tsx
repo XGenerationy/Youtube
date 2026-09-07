@@ -8,7 +8,6 @@ import { DEFAULT_MONTH, MONTH_OPTIONS } from "@/components/srcc/shared";
 import { SessionProvider } from "@/contexts/SessionContext";
 import { TenantProvider } from "@/contexts/TenantContext";
 import type { SessionMe, TenantRead } from "@/lib/api/types";
-import type { SessionMe } from "@/lib/api/types";
 import { withDisplayDigest } from "../../helpers/displayDigestFixtures";
 
 const ORIGINAL_FETCH = globalThis.fetch;

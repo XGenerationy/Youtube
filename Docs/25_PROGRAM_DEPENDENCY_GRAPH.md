@@ -102,7 +102,7 @@ frontend. The #227 interlock remains BLOCKED: a final candidate SHA **b92feb63d*
 reviewed SHA to be verified and merged before U2 ingest proceeds. When #227
 merges, update this graph and the U2 acceptance state in
 Docs/24_US_WITHHOLDING_AND_US_REVENUE_PLAN.md together. The 2026-08-31 states
-below are retained as the poll they replaced. Treat live PR states, not this
+below are retained as the poll they replaced inside a `<!-- historical-poll -->` block; recertification tooling and drift gates must exclude historical-poll blocks. Treat live PR states, not this
 static graph, as the source for merge ordering.
 
 As of the 2026-08-31 live poll, #221 and #225 are open/BLOCKED; #222–#224 are
@@ -149,7 +149,9 @@ $markers = @(
 )
 foreach ($m in $markers) {
   # Exclude this document's own marker declarations (their lines begin with a
-  # quote after rg's path:line: prefix) so a marker cannot match itself.
+  # quote after rg's path:line: prefix) so a marker cannot match itself, and
+  # exclude retained historical polls: only the CURRENT state text counts,
+  # because a stale poll line still contains its dated phrasing by design.
   $hits = rg -n -F $m $docs | Where-Object { $_ -notmatch ":[0-9]+:\s*'" }
   if (-not $hits) { Write-Error "recertification marker not found: $m"; exit 1 }
   $hits

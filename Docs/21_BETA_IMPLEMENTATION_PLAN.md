@@ -175,10 +175,13 @@ missing blobs.
 
 **Permission/persistence smoke:** run as the runtime user in `app` and the
 `app-dev` profile, verify read/write access to both configured directories, write
-sentinels under `/var/lib/ums/artifacts` and `/var/lib/ums/blobs`, recreate with
-`docker compose down` (without `-v`) plus `docker compose up` (and
-`docker compose --profile dev up app-dev` for the dev service), and verify both
-sentinels remain. Remove the sentinels after the check.
+sentinels under `/var/lib/ums/artifacts` and `/var/lib/ums/blobs`, recreate, and
+verify both sentinels remain. Recreate ONLY through the repository launcher —
+`python scripts/compose.py down`, then `python scripts/compose.py up -d` (and
+`python scripts/compose.py --profile dev up app-dev` for the dev service) —
+because raw `docker compose` up bypasses the launcher's child provisioning,
+image pinning, and storage-attestation boundaries that #221 made mandatory for
+starting the app. Remove the sentinels after the check.
 
 > 💡 There is an undocumented workaround for the 503 in the meantime: `request_export`
 > has no dedup on scope+month (`reports/exports.py:383-433`), so the operator can

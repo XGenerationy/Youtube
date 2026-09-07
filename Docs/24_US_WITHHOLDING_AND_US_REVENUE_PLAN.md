@@ -218,7 +218,10 @@ forward-close, retroactive replacement) requires authority over the COMPLETE
 affected month interval -- checking only the submitting principal's single
 `{adsense_account_id}:{YYYY-MM}` grant is insufficient, because one month's grant
 must not be able to move estimates for months outside it. Rate maintenance may
-instead be gated at account-configuration scope (or global administrator), and
+instead be gated at a dedicated account-configuration scope value
+`adsense-account:{adsense_account_id}` — which the same U3 constraint migration
+must add to `ck_access_scopes_scope_type` alongside `adsense-account-month` —
+or by a global administrator, and
 the implementation must test the partial-interval grant rejection. A forward-effective change locks the current open interval, sets its
 previously-null exclusive end once with audit provenance, and inserts the next row in
 one transaction; rate, source, account/category, and start are immutable, so older

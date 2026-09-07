@@ -297,7 +297,7 @@ program. What the code enforces today was verified line by line
 
 0. **Home scope at birth.** Delegated user creation must never leave a tenant-wide
    principal without an org anchor. Require persisted **`home_org_unit_id`** on user
-   creation **or** an atomic **`create_user + scoped_role_assignment`** in one
+   creation **plus** a persisted **`home_org_unit_id`** written in the same
    transaction. Acceptance: an unassigned tenant-wide user **never** exists after
    delegated create flows.
 
@@ -332,7 +332,9 @@ program. What the code enforces today was verified line by line
    Consequences:
    - The matrix is a **release gate**: no sub-company account is issued until it is
      green. A company-scoped principal is driven through every view — channels /
-     revenue / close / exports / audit / groups / connectors — and every response is
+     revenue / close / exports / audit / groups / connectors, AND the Registry
+     view's `GET /org-units` listing, which `api/org_units.py` currently admits to
+     any principal holding `VIEW_ANALYTICS` in any scope — and every response is
      proven to contain only their company's (or their sector's) rows.
    - **Aggregates count as data.** Row filtering is not enough: holdings-wide panels
      (the Command view's "all scopes" gap narrative, tenant-wide rankings and totals,
@@ -360,7 +362,7 @@ matrix + fixes 8–16h, honest unknown until measured; delegated mode in the A1 
 A6 is what makes it safe to hand pieces of it to sub-company people.
 
 **Acceptance criteria (A6):**
-- [ ] Delegated create always sets `home_org_unit_id` or atomically assigns scoped role
+- [ ] Delegated create always sets `home_org_unit_id` (the assignment alone is NOT a durable home scope)
 - [ ] Mutation tests RED when home-scope guard removed
 - [ ] Competitor read-isolation matrix green across all views/exports
 - [ ] No-amplification invariant proven for role assign, grant, revoke, self-modification

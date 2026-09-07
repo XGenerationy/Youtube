@@ -213,7 +213,13 @@ nullable `effective_to_month`, operator/source-report reference, confirmation ti
 revoke reason, and created/revoked timestamps. Enforce 0 ≤ rate ≤ 0.30, valid `YYYY-MM`
 intervals, and no overlapping active interval for the same tenant/account/category with
 a database constraint or a same-key serialized transaction that is race-tested on
-PostgreSQL. A forward-effective change locks the current open interval, sets its
+PostgreSQL. Authorization for every effective-dated rate mutation (create,
+forward-close, retroactive replacement) requires authority over the COMPLETE
+affected month interval -- checking only the submitting principal's single
+`{adsense_account_id}:{YYYY-MM}` grant is insufficient, because one month's grant
+must not be able to move estimates for months outside it. Rate maintenance may
+instead be gated at account-configuration scope (or global administrator), and
+the implementation must test the partial-interval grant rejection. A forward-effective change locks the current open interval, sets its
 previously-null exclusive end once with audit provenance, and inserts the next row in
 one transaction; rate, source, account/category, and start are immutable, so older
 months keep the same rate-record id. A retroactive correction revokes/supersedes the
@@ -317,10 +323,17 @@ cannot serve general FK lookups, so the migration must also create a non-partial
 index on the child columns `(tenant_id, payment_id)`; revoked history stays in the
 table, and payment updates or FK checks must not scan it sequentially.
 
-`POST /adsense/payments/{payment_id}/withholding-actuals` and its CSV service use one
-transaction whose lock order matches `sync_payments` exactly -- the covered
-finance-month rows first in sorted order, then the payment row -- so concurrent
-payment sync and withholding writes serialize instead of deadlocking. Inside that
+`POST /adsense/payments/{payment_id}/withholding-actuals` and its CSV service are
+financially significant writes and are gated by the same withholding-write
+permission and account/month scope rules as the rate and estimate APIs; the
+acceptance criteria include missing-permission, insufficient-scope,
+cross-account, and storage-failure rejections. They use one transaction whose
+lock order must match a refactored `sync_payments` exactly -- the covered
+finance-month rows first in sorted order, then the payment rows. The current
+`SqlAlchemyAdSensePaymentRepository.sync_payments` interleaves one month lock
+with one payment upsert, so the U4 implementation PR must first refactor both
+writers onto this single total order (or document and test a proven compatible
+order) before the deadlock claim holds. Inside that
 transaction the mutation locks and validates the payment plus current active
 revision, marks that prior revision inactive, inserts the new row pointing to it,
 and appends the audit event. A
@@ -345,9 +358,22 @@ returned for audit visibility, but they return no delta and cannot be corrected
 in place -- correction always proceeds by supplying the covered month set through a
 new revision, so history stays immutable while the latest revision remains
 correctable. Missing estimate data returns
-`delta=null` with a typed missing-estimate status. A currency mismatch returns
+`delta=null` with a typed missing-estimate status. The confidence token
+promised for US revenue and the derived estimate has one defined derivation:
+it aggregates the country evidence rows' source quality (report kind and
+freshness), the denominator-compatibility check, and the rate-confirmation
+state into a single label computed backend-side, and the formula is pinned by
+API and export tests -- an implementation must not label it arbitrarily
+(country evidence rows stay `ParsedSourceRow` records without their own
+persisted confidence field). A currency mismatch returns
 `delta=null` with `CURRENCY_MISMATCH_NO_FX`, preserving both source amounts without
-conversion. The comparison remains reproducible after restart. This is the only way to
+conversion. The comparison remains reproducible after restart. All withholding arithmetic
+(share, estimate, actual, delta) uses one canonical calculation order: decimal
+inputs are exact, intermediate values carry full precision, and every persisted
+or returned money value is quantized once at the persistence/serialization
+boundary to six decimal places with `ROUND_HALF_UP`, matching the existing
+finance contract; API and export implementations must not emit unquantized
+values, and boundary plus export tests must pin the rounding. This is the only way to
 catch a silently lapsed W-8 (actual jumps to 24/30% while the estimate stays 15%). Until
 U4, that check is a monthly manual glance at the AdSense payments report.
 
@@ -410,7 +436,11 @@ U4, that check is a monthly manual glance at the AdSense payments report.
 - **No migration/backfill required for the U2 projection fence itself.** Country rows
   stay in the existing source-row table/source-system/key namespace. The alert filter is
   read-model behavior; raw `ROWS_SKIPPED` audit telemetry is preserved.
-- **Confirmed migration required for U3:** add `us_withholding_rates` with tenant RLS,
+- **Confirmed migration required for U3:** replace the `ck_access_scopes_scope_type`
+  check constraint (currently allowlisting only `global`, `sector`, `company`,
+  `channel`, `finance-month`, `export`, and `connector`) so the prescribed
+  `adsense-account-month` scope value can be seeded, with paired migration and
+  rollback tests proving the constraint transition; add `us_withholding_rates` with tenant RLS,
   account/category/effective-interval constraints, serialized overlap protection, and
   create/close/revoke audit provenance. No existing month is backfilled with a guessed
   rate; estimates remain absent until D-U1 rows exist.

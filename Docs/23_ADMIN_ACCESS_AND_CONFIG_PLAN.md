@@ -46,6 +46,7 @@ surface, and the tripwires that keep it safe.
 | Effective access profile | `GET /users/{id}/access` | `users.manage` |
 | Assign role (scoped, audited reason required) | `POST /users/{id}/roles` | `roles.assign` |
 | Revoke role | `POST /users/{id}/roles/{assignment_id}/revoke` | `roles.assign` |
+| Role/permission catalog read (picker + matrix) | `GET /security/roles`, `GET /security/permissions` | `roles.assign` OR `users.manage` |
 | Direct permission grant (scoped) | `POST /users/{id}/permissions` | `roles.assign` |
 | Revoke grant | `POST /users/{id}/permissions/{grant_id}/revoke` | `roles.assign` |
 
@@ -178,6 +179,10 @@ Admin view in `ViewRouter`/nav + hooks. Do not start until **P0-c** merges.
 ### A2 — Access matrix & "who am I" — **4–6h**
 
 - Read-only role × permission matrix from `GET /security/roles` + `/permissions`.
+The catalog read gate stays available to `roles.assign` principals (not only
+`users.manage`): A1's assignment drawer populates its role picker from
+`GET /security/roles`, and moving catalog reads exclusively under
+`users.manage` would 403 the very actors the drawer exists for.
 - A "Your access" panel: the resolved principal, role, scope, and capability list the
   session already carries (`GET /session/me`) — kills the "why is this button dead"
   confusion at the root.

@@ -318,16 +318,20 @@ index on the child columns `(tenant_id, payment_id)`; revoked history stays in t
 table, and payment updates or FK checks must not scan it sequentially.
 
 `POST /adsense/payments/{payment_id}/withholding-actuals` and its CSV service use one
-transaction to lock and validate the payment plus current active revision, mark that
-prior revision inactive, insert the new row pointing to it, and append the audit event. A
+transaction whose lock order matches `sync_payments` exactly -- the covered
+finance-month rows first in sorted order, then the payment row -- so concurrent
+payment sync and withholding writes serialize instead of deadlocking. Inside that
+transaction the mutation locks and validates the payment plus current active
+revision, marks that prior revision inactive, inserts the new row pointing to it,
+and appends the audit event. A
 replay with the same idempotency key returns the same committed revision; a key reused
 with different content fails closed. There is no DELETE or in-place amount edit. The
 mutation must normalize the actual's covered earnings period into a deterministic month
 set before writing: a single-month report produces one covered month; a multi-month
-report expands to every inclusive `YYYY-MM` in the covered period. The transaction then
-locks those finance-month rows in sorted order with the same lock primitive used by close
-/ unlock, serializes against concurrent close/unlock operations, and rejects the insert
-or correction if **any** covered earnings month is locked even when the payment month is
+report expands to every inclusive `YYYY-MM` in the covered period. The month locks are taken first with the same lock primitive used by close/unlock
+and in the same sorted order AdSense payment sync uses, serializing against
+concurrent close/unlock and payment-sync writers, and the insert or correction is
+rejected if **any** covered earnings month is locked even when the payment month is
 later and still open. If the AdSense report or CSV row cannot prove the covered earnings
 months, the mutation fails closed instead of falling back to `adsense_payments.month`.
 The operator must use the existing audited unlock workflow, append the correction with a
@@ -337,8 +341,10 @@ Reads return revision provenance and a backend-computed estimated-vs-actual delt
 when both values carry the same currency and the actual's covered earnings period/account
 aggregation matches the U3 estimate period**; the SPA renders that value and performs no
 finance math. Existing historical rows without a trustworthy covered period can be
-returned for audit visibility, but they return no delta and cannot be corrected without
-supplying the covered month set through a new revision. Missing estimate data returns
+returned for audit visibility, but they return no delta and cannot be corrected
+in place -- correction always proceeds by supplying the covered month set through a
+new revision, so history stays immutable while the latest revision remains
+correctable. Missing estimate data returns
 `delta=null` with a typed missing-estimate status. A currency mismatch returns
 `delta=null` with `CURRENCY_MISMATCH_NO_FX`, preserving both source amounts without
 conversion. The comparison remains reproducible after restart. This is the only way to

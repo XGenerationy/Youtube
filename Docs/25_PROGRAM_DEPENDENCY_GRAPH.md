@@ -96,10 +96,14 @@ PR #210 is historical: it merged on 2026-08-29 into the non-main
 Update 2026-09-01: #221–#229 all carry pushed, suite-validated heads (none merged
 yet) — #221 3044/0, #222 3181/0 plus real backup/rehearsal scenarios, #223 3037/0,
 #224 3165/0, #226 174 bats, #227 2989/0, #228 3099/0, #225 719/719 and #229 588/588
-frontend. The #227 interlock is satisfied: the final shipped SHA is **b92feb63d**
-(2989 passed on fresh PostgreSQL), recorded by the continuation on 2026-09-01; the
-2026-08-31 states below are retained as the poll they replaced. Treat live PR
-states, not this static graph, as the source for merge ordering.
+frontend. The #227 interlock remains BLOCKED: a final candidate SHA **b92feb63d**
+(2989 passed on fresh PostgreSQL) is supplied and recorded by the continuation on
+2026-09-01, but none of #221-#229 is merged, and the hard gate requires the
+reviewed SHA to be verified and merged before U2 ingest proceeds. When #227
+merges, update this graph and the U2 acceptance state in
+Docs/24_US_WITHHOLDING_AND_US_REVENUE_PLAN.md together. The 2026-08-31 states
+below are retained as the poll they replaced. Treat live PR states, not this
+static graph, as the source for merge ordering.
 
 As of the 2026-08-31 live poll, #221 and #225 are open/BLOCKED; #222–#224 are
 open/BEHIND; none is merged. #226 is open/draft/BEHIND with `ci-fast` failing, and
@@ -136,7 +140,7 @@ $markers = @(
   '#222–#224 are open/BEHIND',
   'No migration/backfill required',
   'Final PR #227 SHA is supplied',
-  'the final shipped SHA is **b92feb63d**',
+  'final candidate SHA **b92feb63d**',
   'implemented and suite-validated on `feat/p02a-manual-import-gate`',
   'no environment fallback and no default rate',
   'SELF-grants by the just-created account',
@@ -144,8 +148,11 @@ $markers = @(
   'non-partial btree index on the child columns'
 )
 foreach ($m in $markers) {
-  rg -n -F $m $docs
-  if ($LASTEXITCODE -ne 0) { Write-Error "recertification marker not found: $m"; exit 1 }
+  # Exclude this document's own marker declarations (their lines begin with a
+  # quote after rg's path:line: prefix) so a marker cannot match itself.
+  $hits = rg -n -F $m $docs | Where-Object { $_ -notmatch ":[0-9]+:\s*'" }
+  if (-not $hits) { Write-Error "recertification marker not found: $m"; exit 1 }
+  $hits
 }
 $conflicts = rg -n '^(<<<<<<<|=======|>>>>>>>)' $docs
 if ($LASTEXITCODE -eq 0) { $conflicts; exit 1 }

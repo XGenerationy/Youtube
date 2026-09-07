@@ -284,7 +284,9 @@ database_run="$database_runs"
 
 # The root archive step below runs the APPLICATION image the compose stack
 # builds (archive-mounted is application tooling, not database tooling).
-app_image_id="$(docker image inspect ums-smart-revenue:dev --format '{{.Id}}')"
+# Mirror compose's own selection: the launcher-pinned immutable ID
+# when UMS_APP_IMAGE is set, otherwise the build's default tag.
+app_image_id="$(docker image inspect "${UMS_APP_IMAGE:-ums-smart-revenue:dev}" --format '{{.Id}}')"
 test -n "$app_image_id"
 canonical_host_path="$(realpath "$UMS_APP_DATA_HOST")"
 
@@ -450,7 +452,8 @@ $dbRun = $dbRuns[0].FullName
 
 # The root ownership-adoption step below runs the APPLICATION image the
 # compose stack builds (container-init is application tooling).
-$appImageId = docker image inspect ums-smart-revenue:dev --format '{{.Id}}'
+$appImageRef = if ($env:UMS_APP_IMAGE) { $env:UMS_APP_IMAGE } else { 'ums-smart-revenue:dev' }
+$appImageId = docker image inspect $appImageRef --format '{{.Id}}'
 if (-not $appImageId) { throw 'application image ums-smart-revenue:dev is not built' }
 uv run python scripts/compose_storage.py prepare `
   --path $env:UMS_APP_DATA_HOST
@@ -523,7 +526,9 @@ database_run="$database_runs"
 
 # The root ownership-adoption step below runs the APPLICATION image the
 # compose stack builds (container-init is application tooling).
-app_image_id="$(docker image inspect ums-smart-revenue:dev --format '{{.Id}}')"
+# Mirror compose's own selection: the launcher-pinned immutable ID
+# when UMS_APP_IMAGE is set, otherwise the build's default tag.
+app_image_id="$(docker image inspect "${UMS_APP_IMAGE:-ums-smart-revenue:dev}" --format '{{.Id}}')"
 test -n "$app_image_id"
 canonical_host_path="$(realpath "$UMS_APP_DATA_HOST")"
 

@@ -94,7 +94,7 @@ httpx2 migration addendum checked on: `2026-08-22` (UTC)
 Patch-refresh addendum checked on: `2026-09-07` (UTC)
 
 - PyPI release metadata for the patch-updates group bumped by PR #233:
-  pydantic `2.13.5` (refreses `2.13.4`), psycopg `3.3.5` (refreshes
+  pydantic `2.13.5` (refreshes `2.13.4`), psycopg `3.3.5` (refreshes
   `3.3.4`), and ruff `0.16.6` (refreshes `0.16.4`, lint extra and dev
   extra only). The main table rows above carry the refreshed versions;
   this addendum records that the refresh post-dates the 2026-05-10

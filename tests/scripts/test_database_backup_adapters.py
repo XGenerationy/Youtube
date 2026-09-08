@@ -552,3 +552,86 @@ def test_file_runner_opens_restore_source_as_binary(
     runner = postgres.CommandRunner(timeout_seconds=1)
     assert runner.file_input(["pg_restore"], source) == ""
     assert observed == [b"PGDMP"]
+
+
+def _capture_source() -> postgres.ContainerConnection:
+    """Return the connection contract every native-command test reuses."""
+    return postgres.ContainerConnection(
+        container="source",
+        host="127.0.0.1",
+        port=5432,
+        database="ums",
+        user="postgres",
+        password="secret",
+        image_id="sha256:" + "a" * 64,
+        image_reference="postgres:18-alpine",
+    )
+
+
+def test_in_container_commands_clear_every_libpq_redirect_variable():
+    """Dump, replay, and restore argv pin the connection against inheritance."""
+    cleared: list[tuple[str, ...]] = []
+
+    class _RecordingRunner:
+        """Record each native argv; consume input without touching Docker."""
+
+        timeout_seconds = 30
+
+        def binary_to_file(self, argv, destination, *, environment=None, exit_code=5):
+            """Record one dump argv and write a marker archive."""
+            cleared.append(tuple(argv))
+            destination.write_bytes(b"PGDMP")
+            return None
+
+        def file_to_text(self, argv, source, *, environment=None, exit_code=5):
+            """Record one replay argv and answer empty output."""
+            cleared.append(tuple(argv))
+            return ""
+
+        def stream_to_text(self, argv, source, *, environment=None, exit_code=5):
+            """Record one restore argv and answer empty output."""
+            cleared.append(tuple(argv))
+            return ""
+
+        def file_input(self, argv, source, *, environment=None, exit_code=5):
+            """Record one file-fed argv and answer empty output."""
+            cleared.append(tuple(argv))
+            return ""
+
+    runner = _RecordingRunner()
+    source = _capture_source()
+    postgres.dump_snapshot(
+        runner,
+        source,
+        snapshot_id="00000000-0000-0000-0000-000000000000",
+        destination=Path("dump.bin"),
+    )
+    postgres.apply_sql_file(
+        runner, container="target", user="postgres", database="ums", source=Path("roles.sql")
+    )
+    postgres.restore_dump(
+        runner, container="target", user="postgres", database="ums", source=Path("dump.bin")
+    )
+    redirected = {
+        "PGHOST",
+        "PGHOSTADDR",
+        "PGPORT",
+        "PGUSER",
+        "PGDATABASE",
+        "PGSERVICE",
+        "PGSERVICEFILE",
+        "PGPASSWORD",
+        "PGPASSFILE",
+        "PGSSLMODE",
+        "PGOPTIONS",
+        "PGAPPNAME",
+        "PGCONNECT_TIMEOUT",
+    }
+    assert len(cleared) == 3
+    for argv in cleared:
+        env_entries = {
+            argv[index + 1].split("=", 1)[0]
+            for index, item in enumerate(argv)
+            if item == "-e" and index + 1 < len(argv) and "=" in argv[index + 1]
+        }
+        assert redirected <= env_entries, (redirected - env_entries, argv[:8])

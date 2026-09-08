@@ -503,7 +503,33 @@ def _recovery_members(bundle: Path, archive: Path) -> list[Path]:
         "CREATE ROLE app_tenant;\nCREATE ROLE app_platform;\n",
         encoding="utf-8",
     )
-    database_manifest.write_text('{"schema":"ums-database-backup/v2"}\n', encoding="utf-8")
+    database_manifest.write_text(
+        json.dumps(
+            {
+                "schema": "ums-database-backup/v2",
+                "status": "complete",
+                "artifacts": [
+                    {
+                        "name": "database.dump",
+                        "sha256": (
+                            "320b506c406da6e90ae0654737e9377d19f10df68371520"
+                            "b1279a4c7495c77a5"
+                        ),
+                        "size": 22,
+                    },
+                    {
+                        "name": "roles.sql",
+                        "sha256": (
+                            "bc775661d3f85651a648df1149db3728fcdcf67b30"
+                            "0df0c791cdac2f55e43681"
+                        ),
+                        "size": 50,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     git_revision.write_text("26bf0256c64389a77d1b1053ea6aeb1e7c0bc994\n", encoding="utf-8")
     service_record.write_text("postgres\nredis\n", encoding="utf-8")
     return [

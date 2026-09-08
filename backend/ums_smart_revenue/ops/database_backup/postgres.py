@@ -93,6 +93,27 @@ def _safe_detail(stderr: str) -> str:
     return detail[:800] or "no diagnostic text"
 
 
+# Every in-container PostgreSQL client invocation clears the full set of
+# libpq connection-redirect variables: a container created with any of these
+# inherited could otherwise send the dump, the replays, or the readiness probe
+# to a different server, port, or identity than the one validation inspected.
+_LIBPQ_CLEAR_ARGS: tuple[str, ...] = tuple(
+    arg
+    for value in (
+        "PGHOST", "PGHOSTADDR", "PGPORT", "PGUSER", "PGDATABASE",
+        "PGSERVICE", "PGSERVICEFILE", "PGPASSWORD", "PGPASSFILE",
+        "PGSSLMODE", "PGOPTIONS", "PGAPPNAME", "PGCONNECT_TIMEOUT",
+    )
+    for arg in ("-e", f"{value}=")
+)
+
+
+def _remaining_budget(deadline: float, default_seconds: int) -> int:
+    """Cap one command attempt by the seconds left before the deadline."""
+    remaining = int(deadline - time.monotonic())
+    return max(1, min(default_seconds, remaining))
+
+
 class CommandRunner:
     """Bounded native-command runner with stable, secret-safe failures."""
 
@@ -119,6 +140,7 @@ class CommandRunner:
         stdin: str | None = None,
         environment: Mapping[str, str] | None = None,
         exit_code: int = 5,
+        timeout_seconds: int | None = None,
     ) -> str:
         """Run a command and return its decoded standard output.
 
@@ -128,6 +150,8 @@ class CommandRunner:
             environment: Mapping[str, str] | None. Extra environment layered over the current
                 process.
             exit_code: int. BackupToolError exit code used when the command fails.
+            timeout_seconds: int | None. Per-call timeout override; the runner's
+                own bound applies when omitted.
 
         Returns:
             The command's captured standard output.
@@ -147,7 +171,7 @@ class CommandRunner:
                 capture_output=True,
                 text=True,
                 env=command_environment,
-                timeout=self.timeout_seconds,
+                timeout=timeout_seconds or self.timeout_seconds,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1907,9 +1931,17 @@ def dump_snapshot(
             "exec",
             "-e", "PGHOST=",
             "-e", "PGHOSTADDR=",
-            "-e", "PGSERVICE=",
-            "-e", "PGPASSWORD=",
+            "-e", "PGPORT=",
+            "-e", "PGUSER=",
             "-e", "PGDATABASE=",
+            "-e", "PGSERVICE=",
+            "-e", "PGSERVICEFILE=",
+            "-e", "PGPASSWORD=",
+            "-e", "PGPASSFILE=",
+            "-e", "PGSSLMODE=",
+            "-e", "PGOPTIONS=",
+            "-e", "PGAPPNAME=",
+            "-e", "PGCONNECT_TIMEOUT=",
             source.container,
             "pg_dump",
             "--format=custom",
@@ -1944,9 +1976,17 @@ def dump_toc_entries(runner: CommandRunner, container: str, dump_source: Path | 
         "-i",
         "-e", "PGHOST=",
         "-e", "PGHOSTADDR=",
-        "-e", "PGSERVICE=",
-        "-e", "PGPASSWORD=",
+        "-e", "PGPORT=",
+        "-e", "PGUSER=",
         "-e", "PGDATABASE=",
+        "-e", "PGSERVICE=",
+        "-e", "PGSERVICEFILE=",
+        "-e", "PGPASSWORD=",
+        "-e", "PGPASSFILE=",
+        "-e", "PGSSLMODE=",
+        "-e", "PGOPTIONS=",
+        "-e", "PGAPPNAME=",
+        "-e", "PGCONNECT_TIMEOUT=",
         container,
         "pg_restore",
         "--list",
@@ -1987,12 +2027,14 @@ def wait_for_postgres(
                 [
                     "docker",
                     "exec",
+                    *_LIBPQ_CLEAR_ARGS,
                     source.container,
                     "pg_isready",
                     "--quiet",
                     f"--username={source.user}",
                     f"--dbname={source.database}",
                 ],
+                timeout_seconds=_remaining_budget(deadline, runner.timeout_seconds),
                 exit_code=4,
             )
             connection = _connect(source)
@@ -2035,9 +2077,17 @@ def apply_sql_file(
         "-i",
         "-e", "PGHOST=",
         "-e", "PGHOSTADDR=",
-        "-e", "PGSERVICE=",
-        "-e", "PGPASSWORD=",
+        "-e", "PGPORT=",
+        "-e", "PGUSER=",
         "-e", "PGDATABASE=",
+        "-e", "PGSERVICE=",
+        "-e", "PGSERVICEFILE=",
+        "-e", "PGPASSWORD=",
+        "-e", "PGPASSFILE=",
+        "-e", "PGSSLMODE=",
+        "-e", "PGOPTIONS=",
+        "-e", "PGAPPNAME=",
+        "-e", "PGCONNECT_TIMEOUT=",
         container,
         "psql",
         "--no-psqlrc",
@@ -2085,9 +2135,17 @@ def restore_dump(
         "-i",
         "-e", "PGHOST=",
         "-e", "PGHOSTADDR=",
-        "-e", "PGSERVICE=",
-        "-e", "PGPASSWORD=",
+        "-e", "PGPORT=",
+        "-e", "PGUSER=",
         "-e", "PGDATABASE=",
+        "-e", "PGSERVICE=",
+        "-e", "PGSERVICEFILE=",
+        "-e", "PGPASSWORD=",
+        "-e", "PGPASSFILE=",
+        "-e", "PGSSLMODE=",
+        "-e", "PGOPTIONS=",
+        "-e", "PGAPPNAME=",
+        "-e", "PGCONNECT_TIMEOUT=",
         container,
         "pg_restore",
         "--exit-on-error",

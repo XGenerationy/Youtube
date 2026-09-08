@@ -993,3 +993,20 @@ def test_restore_cli_maps_a_missing_selection_to_operator_refusal(
     error = capsys.readouterr().err
     assert "does not exist" in error
     assert "private-path" not in error
+
+
+def test_empty_install_gate_ignores_session_state_rows():
+    """A touched app_tenant_context row alone is not recovery evidence."""
+    seed_only = {name: 1 for name in backup.SEED_TABLES}
+    with_tenant_state = dict(seed_only)
+    with_tenant_state["public.app_tenant_context"] = 1
+    # Session state never counts as application data: seed rows plus ONLY a
+    # tenant-context row still refuses (previously this published as evidence).
+    with pytest.raises(backup.BackupToolError, match="no rows outside the migration seed"):
+        backup._content_floor(with_tenant_state)
+    # A real application row alongside the session state passes the gate.
+    with_real_row = dict(with_tenant_state)
+    with_real_row["public.channels"] = 1
+    assert backup._content_floor(with_real_row) == {
+        name: 1 for name in sorted(backup.SEED_TABLES)
+    }

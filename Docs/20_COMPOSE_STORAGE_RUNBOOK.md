@@ -300,7 +300,7 @@ host_gid="$(id -g)"
 docker run --rm --user 0:0 \
   --volume "$UMS_APP_DATA_HOST":/var/lib/ums \
   --volume "$bundle":/backup \
-  --env UMS_APP_DATA_HOST="$UMS_APP_DATA_HOST" \
+  --env UMS_APP_DATA_HOST_CONTRACT="$UMS_APP_DATA_HOST" \
   --env UMS_APP_DATA_HOST_CANONICAL_CONTRACT="$canonical_host_path" \
   "$app_image_id" \
   python /srv/app/scripts/compose_storage.py archive-mounted \
@@ -493,7 +493,7 @@ if ($env:UMS_BLOB_BACKEND -eq 'gcs') {
 # the recovery manifest read above.
 docker run --rm --user 0:0 `
   --volume ${env:UMS_APP_DATA_HOST}:/var/lib/ums `
-  --env UMS_APP_DATA_HOST=$env:UMS_APP_DATA_HOST `
+  --env UMS_APP_DATA_HOST_CONTRACT=$env:UMS_APP_DATA_HOST `
   --env UMS_APP_DATA_HOST_CANONICAL_CONTRACT=$canonicalHostPath `
   $appImageId `
   python /srv/app/scripts/compose_storage.py container-init `
@@ -564,7 +564,7 @@ fi
 # receipts the mounted-marker contract requires are passed explicitly.
 docker run --rm --user 0:0 \
   --volume "$UMS_APP_DATA_HOST":/var/lib/ums \
-  --env UMS_APP_DATA_HOST="$UMS_APP_DATA_HOST" \
+  --env UMS_APP_DATA_HOST_CONTRACT="$UMS_APP_DATA_HOST" \
   --env UMS_APP_DATA_HOST_CANONICAL_CONTRACT="$canonical_host_path" \
   "$app_image_id" \
   python /srv/app/scripts/compose_storage.py container-init \

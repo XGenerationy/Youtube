@@ -53,6 +53,7 @@ READY_FILENAME = ".ums-storage-ready.json"
 STORAGE_DIRECTORIES = ("artifacts", "blobs")
 
 
+DATABASE_MANIFEST_MEMBER = "database-manifest.json"
 REQUIRED_RECOVERY_MEMBERS = frozenset(
     {"git-revision.txt", "running-services.txt", "ums-app-data.tgz"}
 )
@@ -117,7 +118,10 @@ def _reject_existing_redirects(path: Path, *, stop_at: Path | None = None) -> No
     """Fail if any path on the way to the target is a redirect."""
     candidate = path
     while True:
-        if candidate.exists() and _is_redirect(candidate):
+        # FIX: Path.exists() is False for a dangling symlink, which previously
+        # skipped this check entirely; lexists() sees the link itself, so a
+        # planted (even not-yet-resolving) redirect is refused.
+        if os.path.lexists(candidate) and _is_redirect(candidate):
             raise StorageContractError(f"storage paths may not traverse a link: {candidate}")
         if candidate in (candidate.parent, stop_at):
             return
@@ -1130,6 +1134,49 @@ def _require_gcs_snapshot_when_needed(
     )
 
 
+def _require_parseable_database_manifest(
+    files: list[Path], manifest: Path, bundle_root: Path
+) -> None:
+    """Parse the database package manifest before the bundle is sealed.
+
+    A structurally complete filename set says nothing about content: the
+    database-manifest.json member must parse, carry the restorable schema and
+    status, and describe exactly the dump and roles artifacts sitting beside
+    it, or the bundle is not recovery evidence.
+    """
+    candidates = [
+        candidate
+        for candidate in files
+        if candidate.name == DATABASE_MANIFEST_MEMBER
+        and len(candidate.resolve(strict=True).relative_to(bundle_root).parts) == 2
+    ]
+    if len(candidates) != 1:
+        raise StorageContractError(
+            "compose recovery bundle requires exactly one database-manifest.json"
+        )
+    try:
+        payload = json.loads(candidates[0].read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StorageContractError(
+            "database-manifest.json is unreadable; refusing to seal the bundle"
+        ) from exc
+    if not isinstance(payload, dict) or payload.get("schema") != "ums-database-backup/v2":
+        raise StorageContractError("database-manifest.json has an unknown schema")
+    if payload.get("status") != "complete":
+        raise StorageContractError("database-manifest.json is not a completed backup")
+    artifacts = payload.get("artifacts")
+    run_dir = candidates[0].parent
+    if not isinstance(artifacts, list) or not artifacts:
+        raise StorageContractError("database-manifest.json lists no artifacts")
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or not isinstance(artifact.get("name"), str):
+            raise StorageContractError("database-manifest.json artifact entry is malformed")
+        member = run_dir / artifact["name"]
+        if not member.is_file() or _is_redirect(member):
+            raise StorageContractError(
+                f"database-manifest.json artifact is missing from the package: {artifact['name']}"
+            )
+
 def create_bundle_manifest(
     output: Path,
     files: list[Path],
@@ -1175,6 +1222,7 @@ def create_bundle_manifest(
         # FIX: A partial set could previously be sealed and described as a
         # complete coordinated recovery bundle.
         _require_complete_recovery_members(records)
+        _require_parseable_database_manifest(files, manifest, bundle_root)
         _require_gcs_snapshot_when_needed(
             records,
             gcs_snapshot_payload,

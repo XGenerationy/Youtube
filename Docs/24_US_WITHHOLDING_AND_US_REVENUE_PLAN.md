@@ -135,6 +135,14 @@ to identify that exact SHA as satisfying the contract, and only if the focused t
 and alert behavior below are verified at those bytes. Do not infer completion from an
 open PR title, intermediate head, or the old separate-source implementation.
 
+The U2 acceptance gate includes the FETCH, not just the parse: the production
+`YouTubeAnalyticsRunner` path must issue the per-channel `dimensions=country`
+content-owner query (F4's user-activity-by-country shape), extending
+`_build_query_request` beyond the fixed `_DIMENSIONS = "month"` (F1) — a
+submission that only parses an already-country-shaped fixture while the production
+client still queries month-only does NOT satisfy this gate, and the focused tests
+must cover the extended request builder against the real query shape.
+
 The cleanup must keep country evidence on the existing allowlisted
 `source_system="youtube_analytics"`; it must not invent a second source-system
 value. The parser must own the dimension shape by emitting
@@ -208,7 +216,11 @@ reproduce an older month's estimate after the rate changes.
 Add tenant-scoped `us_withholding_rates` records with: `id`, `tenant_id`, non-blank
 `source_account_id`, allowlisted `income_category` (the initial value is
 `youtube_copyright_royalty`), decimal `rate`, inclusive `effective_from_month`, exclusive
-nullable `effective_to_month`, operator/source-report reference, confirmation timestamp,
+nullable `effective_to_month`, operator/source-report reference, confirmation timestamp
+with a bounded validity window (a confirmation older than the documented window —
+sized to the tax-form review cadence — is stale and the estimate reverts to absent
+until re-confirmed; an open-ended interval never carries an unexpired-by-construction
+confirmation),
 `created_by`, creation reason, one-time interval-close actor/reason/time, `revoked_by`,
 revoke reason, and created/revoked timestamps. Enforce 0 ≤ rate ≤ 0.30, valid `YYYY-MM`
 intervals, and no overlapping active interval for the same tenant/account/category with
@@ -442,8 +454,13 @@ U4, that check is a monthly manual glance at the AdSense payments report.
 - **Confirmed migration required for U3:** replace the `ck_access_scopes_scope_type`
   check constraint (currently allowlisting only `global`, `sector`, `company`,
   `channel`, `finance-month`, `export`, and `connector`) so the prescribed
-  `adsense-account-month` scope value can be seeded, with paired migration and
-  rollback tests proving the constraint transition; add `us_withholding_rates` with tenant RLS,
+  `adsense-account-month` AND `adsense-account` scope values can be seeded, with paired
+  migration and rollback tests proving the constraint transition; the same U3 change
+  must extend every runtime consumer of scope types — principal loading, scope
+  parsing/validation, and the authorization allowlists — so the new values are
+  loadable and enforceable, not merely storable, and the U3 completion gates cover
+  BOTH scope values (month-scoped estimate reads and account-scoped rate
+  maintenance) with missing/insufficient-scope tests for each; add `us_withholding_rates` with tenant RLS,
   account/category/effective-interval constraints, serialized overlap protection, and
   create/close/revoke audit provenance. No existing month is backfilled with a guessed
   rate; estimates remain absent until D-U1 rows exist.

@@ -93,6 +93,7 @@ PR #210 is historical: it merged on 2026-08-29 into the non-main
 | #210 (historical; merged 2026-08-29 into non-main `docs/deployment-readiness-audit`) | **#221–#225** (current P0-a … P0-e successors on `main`) |
 | Living schedule | Docs/21 status table on `main` after each P0 split merges |
 
+<!-- historical-poll -->
 Update 2026-09-01: #221–#229 all carry pushed, suite-validated heads (none merged
 yet) — #221 3044/0, #222 3181/0 plus real backup/rehearsal scenarios, #223 3037/0,
 #224 3165/0, #226 174 bats, #227 2989/0, #228 3099/0, #225 719/719 and #229 588/588
@@ -101,15 +102,24 @@ frontend. The #227 interlock remains BLOCKED: a final candidate SHA **b92feb63d*
 2026-09-01, but none of #221-#229 is merged, and the hard gate requires the
 reviewed SHA to be verified and merged before U2 ingest proceeds. When #227
 merges, update this graph and the U2 acceptance state in
-Docs/24_US_WITHHOLDING_AND_US_REVENUE_PLAN.md together. The 2026-08-31 states
-below are retained as the poll they replaced inside a `<!-- historical-poll -->` block; recertification tooling and drift gates must exclude historical-poll blocks. Treat live PR states, not this
-static graph, as the source for merge ordering.
+Docs/24_US_WITHHOLDING_AND_US_REVENUE_PLAN.md together.
+<!-- /historical-poll -->
+The retained dated snapshots above sit inside `historical-poll` blocks;
+recertification tooling and drift gates must exclude historical-poll blocks. Treat
+live PR states, not this static graph, as the source for merge ordering.
 
+<!-- historical-poll -->
 As of the 2026-08-31 live poll, #221 and #225 are open/BLOCKED; #222–#224 are
 open/BEHIND; none is merged. #226 is open/draft/BEHIND with `ci-fast` failing, and
 #227 is open/draft/BLOCKED with no operator-supplied final SHA; its current candidate
 also has an unresolved P1 and unpushed changes. Treat live PR states, not this static
 graph, as the source for merge ordering.
+<!-- /historical-poll -->
+
+Update 2026-09-07: merged to `main` — #221 (P0-a, 2026-09-03), #230, #231, #232,
+#217 (EGP Phase 1), and #233 (dependency refresh). Still open: #220 (this PR),
+#222 (green, thread cleanup), #224, #225, and drafts #226–#229. The #227 interlock
+remains BLOCKED: the candidate SHA b92feb63d is still an unmerged PR head.
 
 See also: [`20_DEPLOYMENT_READINESS_AUDIT.md`](20_DEPLOYMENT_READINESS_AUDIT.md),
 [`21_BETA_IMPLEMENTATION_PLAN.md`](21_BETA_IMPLEMENTATION_PLAN.md),

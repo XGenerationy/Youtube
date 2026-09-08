@@ -213,11 +213,13 @@ mounted at the same `/var/lib/ums` target and verified to survive
 
 **Permission/persistence smoke before real data:** as the runtime user, verify
 both configured directories are readable and writable in `app` and the `app-dev`
-profile. Write one sentinel under each target, recreate with `docker compose down`
-(without `-v`) followed by `docker compose up` (and
-`docker compose --profile dev up app-dev` for the dev service), and verify both
-sentinels remain; clean them up after the check. Repeat for `migrate` only if its
-service receives the storage mount.
+profile. Write one sentinel under each target, then recreate ONLY through the
+repository launcher — `python scripts/compose.py down` followed by
+`python scripts/compose.py up -d` (and `python scripts/compose.py --profile dev up
+app-dev` for the dev service), because raw `docker compose` up bypasses the
+launcher's child provisioning, image pinning, and storage-attestation boundaries —
+and verify both sentinels remain; clean them up after the check. Repeat for
+`migrate` only if its service receives the storage mount.
 
 ### B5 — There is no browser app in any non-dev path
 `frontend/` has no Dockerfile; compose has no frontend service; the backend mounts

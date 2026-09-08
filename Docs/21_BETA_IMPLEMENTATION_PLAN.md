@@ -236,8 +236,14 @@ The beta import runner and API boundary must fail closed as one contract:
    intended fact per channel and matching amounts/report id, row count, and control
    total. An active non-required channel with a stale manual fact is an extra and fails
    the batch. Roster drift between preflight and post-check also aborts and restarts the
-   comparison. Any missing/extra/mismatched row exits non-zero; the month is not
-   presented as complete or eligible for close.
+   comparison. Because the roster read and the per-channel fact reads are separate
+   requests, the comparison must serialize against roster mutation: the batch holds
+   the same tenant-scoped lock the roster write path takes (or re-reads the roster
+   under it) for the whole preflight→post-check window, so a channel created,
+   activated, or flipped to `revenue_required` mid-import cannot slip between the
+   completeness reads — detected drift aborts and restarts rather than certifying a
+   month whose roster changed under the comparison. Any missing/extra/mismatched row
+   exits non-zero; the month is not presented as complete or eligible for close.
 
 **Acceptance criteria (P0.2a):**
 - [x] Missing/mixed/EGP source metadata turns the preflight RED with zero facts written

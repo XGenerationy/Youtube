@@ -648,6 +648,7 @@ _PG18_PREDEFINED_MEMBERSHIPS = (
 #   - File: backend/ums_smart_revenue/ops/database_backup/backup.py -> snapshot.
 # ============================================================================
 
+
 def _require_stock_postgres_command(inspect: dict[str, object]) -> None:
     """Refuse a container whose command differs from the official image default."""
     if inspect.get("Path") != "docker-entrypoint.sh" or inspect.get("Args") != ["postgres"]:
@@ -757,6 +758,7 @@ def _connect(
 #   - File: backend/ums_smart_revenue/ops/database_backup/restore.py -> prewrite.
 #   - File: Docs/22_BACKUP_RESTORE_AND_REHEARSAL.md -> endpoint contract.
 # ============================================================================
+
 def require_password_authentication(source: ContainerConnection) -> None:
     """Prove the loopback target rejects a fresh deliberately wrong password.
 
@@ -866,6 +868,7 @@ def _table_names(connection: Connection[tuple[object, ...]]) -> list[tuple[str, 
 #   - File: backend/ums_smart_revenue/ops/database_backup/backup.py -> capture.
 #   - File: Docs/22_BACKUP_RESTORE_AND_REHEARSAL.md -> supported source scope.
 # ============================================================================
+
 def require_no_foreign_tables(connection: Connection[tuple[object, ...]]) -> None:
     """Refuse foreign tables because pg_dump cannot capture their external rows.
 
@@ -911,6 +914,7 @@ def require_no_foreign_tables(connection: Connection[tuple[object, ...]]) -> Non
 #   - File: scripts/backup_database.py -> explicit quiescence acknowledgement.
 #   - File: backend/ums_smart_revenue/ops/database_backup/backup.py -> post-dump.
 # ============================================================================
+
 def require_source_quiescent(connection: Connection[tuple[object, ...]]) -> None:
     """Refuse a source with another database session during the writer-stop window.
 
@@ -954,6 +958,7 @@ def require_source_quiescent(connection: Connection[tuple[object, ...]]) -> None
 #   - File: backend/ums_smart_revenue/ops/database_backup/backup.py -> counts/dump.
 #   - File: Docs/22_BACKUP_RESTORE_AND_REHEARSAL.md -> capture contract.
 # ============================================================================
+
 def _lock_export_relations(connection: Connection[tuple[object, ...]]) -> None:
     """Fence catalog rewrites/TRUNCATE before the repeatable-read snapshot exists."""
     # SHARE on pg_class conflicts with the catalog RowExclusive work needed by
@@ -985,6 +990,7 @@ def _lock_export_relations(connection: Connection[tuple[object, ...]]) -> None:
 #   - File: backend/ums_smart_revenue/ops/database_backup/backup.py -> pre/post.
 #   - File: backend/ums_smart_revenue/ops/database_backup/contracts.py -> record.
 # ============================================================================
+
 def snapshot_sequences(
     connection: Connection[tuple[object, ...]],
 ) -> tuple[SequenceRecord, ...]:
@@ -1054,6 +1060,7 @@ def snapshot_sequences(
     records.sort(key=lambda record: record.qualified_name)
     return tuple(records)
 
+
 def target_sequences(source: ContainerConnection) -> tuple[SequenceRecord, ...]:
     """Read restored sequence parameters/state for exact manifest verification.
 
@@ -1085,6 +1092,7 @@ def target_sequences(source: ContainerConnection) -> tuple[SequenceRecord, ...]:
 #   - File: backend/ums_smart_revenue/ops/database_backup/semantic.py -> expected.
 #   - File: backend/ums_smart_revenue/ops/database_backup/restore.py -> verifies.
 # ============================================================================
+
 
 def _fetch_authorization_rows(
     connection: Connection[tuple[object, ...]],
@@ -1553,6 +1561,7 @@ def require_clean_target(source: ContainerConnection) -> None:
 #   - File: backend/ums_smart_revenue/ops/database_backup/restore.py -> prewrite.
 #   - File: scripts/compose_restore_roles.sql -> later creates two NOLOGIN roles.
 # ============================================================================
+
 def require_dedicated_cluster(source: ContainerConnection) -> None:
     """Refuse anything except the exact fresh PostgreSQL 18 cluster shape.
 
@@ -1882,6 +1891,7 @@ def snapshot_source_record(
 
 
 @contextmanager
+
 def exported_snapshot(
     source: ContainerConnection,
 ) -> Iterator[tuple[Connection[tuple[object, ...]], str]]:

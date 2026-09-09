@@ -216,11 +216,15 @@ reproduce an older month's estimate after the rate changes.
 Add tenant-scoped `us_withholding_rates` records with: `id`, `tenant_id`, non-blank
 `source_account_id`, allowlisted `income_category` (the initial value is
 `youtube_copyright_royalty`), decimal `rate`, inclusive `effective_from_month`, exclusive
-nullable `effective_to_month`, operator/source-report reference, confirmation timestamp
-with a bounded validity window (a confirmation older than the documented window —
-sized to the tax-form review cadence — is stale and the estimate reverts to absent
-until re-confirmed; an open-ended interval never carries an unexpired-by-construction
-confirmation),
+nullable `effective_to_month`, operator/source-report reference, confirmation provenance
+modeled as audited revisions — the CURRENT confirmation carries a bounded
+validity window sized to the tax-form review cadence, evaluated against each
+estimate's covered earnings month: an estimate for a month inside the
+confirmed interval resolves from the persisted rate/confirmation revision
+that covered it, so historical recomputation never changes or loses its
+evidence. A reconfirmation appends a NEW audited revision; timestamps are
+never updated in place. A month covered by no currently-valid confirmation
+computes no NEW estimate (absent) without invalidating historical revisions,
 `created_by`, creation reason, one-time interval-close actor/reason/time, `revoked_by`,
 revoke reason, and created/revoked timestamps. Enforce 0 ≤ rate ≤ 0.30, valid `YYYY-MM`
 intervals, and no overlapping active interval for the same tenant/account/category with
@@ -340,9 +344,14 @@ table, and payment updates or FK checks must not scan it sequentially.
 
 `POST /adsense/payments/{payment_id}/withholding-actuals` and its CSV service are
 financially significant writes and are gated by the same withholding-write
-permission and account/month scope rules as the rate and estimate APIs; the
+permission and account/month scope rules as the rate and estimate APIs --
+and, exactly like effective-dated rate mutations, authorization must cover
+the COMPLETE covered earnings month set, not merely the submitting month:
+a principal authorized for January cannot submit a January-February actual
+that moves February's delta. The account-level configuration scope
+(`adsense-account:{id}`) satisfies the gate for the whole set. The
 acceptance criteria include missing-permission, insufficient-scope,
-cross-account, and storage-failure rejections. They use one transaction whose
+partial-interval, cross-account, and storage-failure rejections. They use one transaction whose
 lock order must match a refactored `sync_payments` exactly -- the covered
 finance-month rows first in sorted order, then the payment rows. The current
 `SqlAlchemyAdSensePaymentRepository.sync_payments` interleaves one month lock
@@ -365,8 +374,13 @@ months, the mutation fails closed instead of falling back to `adsense_payments.m
 The operator must use the existing audited unlock workflow, append the correction with a
 new reason/source reference, and re-lock.
 
-Reads return revision provenance and a backend-computed estimated-vs-actual delta **only
-when both values carry the same currency and the actual's covered earnings period/account
+Ingestion requires the actual's income_category to be one of the
+allowlisted categories, and reads return revision provenance and a
+backend-computed estimated-vs-actual delta **only when both values carry the
+same currency, the actual's income_category EXACTLY equals the U3
+rate/estimate's category (a copyright actual never deltas against a
+motion-picture estimate; a mismatch returns `delta=null` with a typed
+`CATEGORY_MISMATCH` status), and the actual's covered earnings period/account
 aggregation matches the U3 estimate period**; the SPA renders that value and performs no
 finance math. Existing historical rows without a trustworthy covered period can be
 returned for audit visibility, but they return no delta and cannot be corrected

@@ -182,7 +182,13 @@ Admin view in `ViewRouter`/nav + hooks. Do not start until **P0-c** merges.
 The catalog read gate stays available to `roles.assign` principals (not only
 `users.manage`): A1's assignment drawer populates its role picker from
 `GET /security/roles`, and moving catalog reads exclusively under
-`users.manage` would 403 the very actors the drawer exists for.
+`users.manage` would 403 the very actors the drawer exists for. THIS IS A
+SCHEDULED BACKEND CHANGE, not a documentation note: today
+`api/security.py::_require_audit_view` still requires global `audit.view`,
+so A1 must widen the catalog-read gate to `roles.assign OR users.manage`
+(acceptance test: a directly granted assigner without `audit.view` reads
+`/security/roles` successfully) before the drawer works for non-audit
+principals. A2's matrix gate remains independently decided.
 - A "Your access" panel: the resolved principal, role, scope, and capability list the
   session already carries (`GET /session/me`) — kills the "why is this button dead"
   confusion at the root.

@@ -226,7 +226,14 @@ The beta import runner and API boundary must fail closed as one contract:
    for every removed/superseded fact, and make the replacement idempotent by manifest
    hash/report id. A retry after interruption repeats the same replacement and leaves
    one exact active set; a reused idempotency key with different content fails closed.
-5. On interruption, rerun the complete manifest. A successful single 201 is only a
+5. Every `MANUAL_UPLOAD` write is bound to its batch ledger: the row-level
+   `POST /revenue/facts` path REQUIRES the batch key (and manifest hash) of
+   an open batch for `source_kind=manual_upload` — a write without a batch
+   key, or against a completed/superseded ledger, is rejected, so a delayed
+   POST from an older run can never upsert into a month the ledger already
+   certified, and each row's `source_currency` must equal the manifest's
+   recorded currency.
+   On interruption, rerun the complete manifest. A successful single 201 is only a
    row smoke, never a batch-success signal.
 6. After the loop, take the complete active roster from the current, unpaginated
    `GET /channels` response and compare its `revenue_required` set with the manifest.

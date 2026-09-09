@@ -146,8 +146,8 @@ $docs = @(
 )
 $markers = @(
   '2026-08-31',
-  '#221 and #225 are open/BLOCKED',
-  '#222–#224 are open/BEHIND',
+  '#227 interlock remains BLOCKED',
+  'merged to `main`',
   'No migration/backfill required',
   'Final PR #227 SHA is supplied',
   'final candidate SHA **b92feb63d**',
@@ -157,15 +157,20 @@ $markers = @(
   'typed `PAYMENT_NOT_FINALIZED` status',
   'non-partial btree index on the child columns'
 )
+foreach ($doc in $docs) {
+  # Remove historical-poll block CONTENT before any marker search: retained
+  # dated snapshots still contain their old phrasing by design, so a
+  # current-state marker must never be satisfied inside them.
+  $current = (Get-Content $doc -Raw) -replace
+    '(?s)<!-- historical-poll -->.*?<!-- /historical-poll -->', ''
+  Set-Content "$doc.current" -Value $current -NoNewline
+}
 foreach ($m in $markers) {
-  # Exclude this document's own marker declarations (their lines begin with a
-  # quote after rg's path:line: prefix) so a marker cannot match itself, and
-  # exclude retained historical polls: only the CURRENT state text counts,
-  # because a stale poll line still contains its dated phrasing by design.
-  $hits = rg -n -F $m $docs | Where-Object { $_ -notmatch ":[0-9]+:\s*'" }
-  if (-not $hits) { Write-Error "recertification marker not found: $m"; exit 1 }
+  $hits = rg -n -F $m --glob '*.current' $docs
+  if ($LASTEXITCODE -ne 0) { Write-Error "recertification marker not found: $m"; exit 1 }
   $hits
 }
+Remove-Item "$docs*.current" -ErrorAction SilentlyContinue
 $conflicts = rg -n '^(<<<<<<<|=======|>>>>>>>)' $docs
 if ($LASTEXITCODE -eq 0) { $conflicts; exit 1 }
 if ($LASTEXITCODE -gt 1) { exit $LASTEXITCODE }

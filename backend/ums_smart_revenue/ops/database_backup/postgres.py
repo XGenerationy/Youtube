@@ -1051,8 +1051,8 @@ def snapshot_sequences(
                 is_called=state[1],
             )
         )
+    records.sort(key=lambda record: record.qualified_name)
     return tuple(records)
-
 
 def target_sequences(source: ContainerConnection) -> tuple[SequenceRecord, ...]:
     """Read restored sequence parameters/state for exact manifest verification.
@@ -1237,6 +1237,10 @@ def snapshot_table_counts(
         if row is None or isinstance(row[0], bool) or not isinstance(row[0], int):
             raise BackupToolError(f"could not count {schema}.{name}", exit_code=4)
         records.append(TableRecord(schema=schema, name=name, rows=row[0]))
+    # FIX: capture ORDER BY follows PostgreSQL identifier collation, which can
+    # disagree with Python's codepoint sort; the manifest contract validates
+    # Python order, so sort here before the manifest ever sees the records.
+    records.sort(key=lambda record: record.qualified_name)
     return tuple(records)
 
 
@@ -2052,8 +2056,9 @@ def wait_for_postgres(
                 source, connect_timeout=_remaining_budget(deadline, 10)
             )
             connection.close()
-            if time.monotonic() >= deadline:
-                raise BackupToolError("target PostgreSQL did not become ready", exit_code=4)
+            # The probe SUCCEEDED: a connection closed cleanly inside the
+            # budget proves readiness even at the boundary instant — only a
+            # FAILED attempt should consult the deadline.
             return
         except BackupToolError:
             if time.monotonic() >= deadline:

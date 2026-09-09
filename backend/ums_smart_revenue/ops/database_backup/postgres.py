@@ -1891,7 +1891,6 @@ def snapshot_source_record(
 
 
 @contextmanager
-
 def exported_snapshot(
     source: ContainerConnection,
 ) -> Iterator[tuple[Connection[tuple[object, ...]], str]]:

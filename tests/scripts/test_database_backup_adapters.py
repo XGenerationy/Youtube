@@ -582,7 +582,6 @@ def test_in_container_commands_clear_every_libpq_redirect_variable():
             """Record one dump argv and write a marker archive."""
             cleared.append(tuple(argv))
             destination.write_bytes(b"PGDMP")
-            return None
 
         @staticmethod
         def file_to_text(argv, source, *, environment=None, exit_code=5):

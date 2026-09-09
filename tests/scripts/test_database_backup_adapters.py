@@ -577,23 +577,27 @@ def test_in_container_commands_clear_every_libpq_redirect_variable():
 
         timeout_seconds = 30
 
-        def binary_to_file(self, argv, destination, *, environment=None, exit_code=5):
+        @staticmethod
+        def binary_to_file(argv, destination, *, environment=None, exit_code=5):
             """Record one dump argv and write a marker archive."""
             cleared.append(tuple(argv))
             destination.write_bytes(b"PGDMP")
             return None
 
-        def file_to_text(self, argv, source, *, environment=None, exit_code=5):
+        @staticmethod
+        def file_to_text(argv, source, *, environment=None, exit_code=5):
             """Record one replay argv and answer empty output."""
             cleared.append(tuple(argv))
             return ""
 
-        def stream_to_text(self, argv, source, *, environment=None, exit_code=5):
+        @staticmethod
+        def stream_to_text(argv, source, *, environment=None, exit_code=5):
             """Record one restore argv and answer empty output."""
             cleared.append(tuple(argv))
             return ""
 
-        def file_input(self, argv, source, *, environment=None, exit_code=5):
+        @staticmethod
+        def file_input(argv, source, *, environment=None, exit_code=5):
             """Record one file-fed argv and answer empty output."""
             cleared.append(tuple(argv))
             return ""

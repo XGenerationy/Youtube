@@ -1135,7 +1135,7 @@ def _require_gcs_snapshot_when_needed(
 
 
 def _require_parseable_database_manifest(
-    files: list[Path], manifest: Path, bundle_root: Path
+    files: list[Path], bundle_root: Path
 ) -> None:
     """Parse the database package manifest before the bundle is sealed.
 
@@ -1154,8 +1154,14 @@ def _require_parseable_database_manifest(
         raise StorageContractError(
             "compose recovery bundle requires exactly one database-manifest.json"
         )
+    payload = _decoded_database_manifest(candidates[0])
+    _require_manifested_artifacts_present(payload, run_dir=candidates[0].parent)
+
+
+def _decoded_database_manifest(member: Path) -> dict[str, object]:
+    """Decode one database manifest and enforce its restorable envelope."""
     try:
-        payload = json.loads(candidates[0].read_text(encoding="utf-8"))
+        payload = json.loads(member.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise StorageContractError(
             "database-manifest.json is unreadable; refusing to seal the bundle"
@@ -1164,8 +1170,14 @@ def _require_parseable_database_manifest(
         raise StorageContractError("database-manifest.json has an unknown schema")
     if payload.get("status") != "complete":
         raise StorageContractError("database-manifest.json is not a completed backup")
+    return payload
+
+
+def _require_manifested_artifacts_present(
+    payload: dict[str, object], *, run_dir: Path
+) -> None:
+    """Require every artifact the manifest describes to sit beside it."""
     artifacts = payload.get("artifacts")
-    run_dir = candidates[0].parent
     if not isinstance(artifacts, list) or not artifacts:
         raise StorageContractError("database-manifest.json lists no artifacts")
     for artifact in artifacts:
@@ -1176,6 +1188,7 @@ def _require_parseable_database_manifest(
             raise StorageContractError(
                 f"database-manifest.json artifact is missing from the package: {artifact['name']}"
             )
+
 
 def create_bundle_manifest(
     output: Path,
@@ -1222,7 +1235,7 @@ def create_bundle_manifest(
         # FIX: A partial set could previously be sealed and described as a
         # complete coordinated recovery bundle.
         _require_complete_recovery_members(records)
-        _require_parseable_database_manifest(files, manifest, bundle_root)
+        _require_parseable_database_manifest(files, bundle_root)
         _require_gcs_snapshot_when_needed(
             records,
             gcs_snapshot_payload,

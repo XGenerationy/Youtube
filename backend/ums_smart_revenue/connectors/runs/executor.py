@@ -873,7 +873,6 @@ class ConnectorJobExecutor:
             recovered += self._recover_tenant_submission_intents(tenant_id=tenant_id)
         return recovered
 
-
     @staticmethod
     def _recovery_intent_statement(
         *,
@@ -898,7 +897,6 @@ class ConnectorJobExecutor:
         if dialect == "postgresql":
             statement = statement.with_for_update(of=intent, skip_locked=True)
         return statement
-
 
     def _record_recovered_intent(
         self,
@@ -944,7 +942,6 @@ class ConnectorJobExecutor:
                 "error_class": "ExecutorShutdownRecovery",
             },
         )
-
 
     def _recover_tenant_submission_intents(self, *, tenant_id: UUID) -> int:
         """Reconcile one tenant's unmatched request_ids in bounded batches."""

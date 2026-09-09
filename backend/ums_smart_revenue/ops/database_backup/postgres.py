@@ -728,7 +728,9 @@ def resolve_container_connection(runner: CommandRunner, container: str) -> Conta
     )
 
 
-def _connect(source: ContainerConnection) -> Connection[tuple[object, ...]]:
+def _connect(
+    source: ContainerConnection, *, connect_timeout: int = 10
+) -> Connection[tuple[object, ...]]:
     """Open a psycopg connection to the target container."""
     try:
         return psycopg.connect(
@@ -737,7 +739,7 @@ def _connect(source: ContainerConnection) -> Connection[tuple[object, ...]]:
             dbname=source.database,
             user=source.user,
             password=source.password,
-            connect_timeout=10,
+            connect_timeout=connect_timeout,
         )
     except psycopg.Error as exc:
         raise BackupToolError(
@@ -1329,6 +1331,14 @@ SELECT (
        AND n.nspname NOT LIKE 'pg\_toast\_temp\_%' ESCAPE '\')
   + (SELECT count(*) FROM pg_catalog.pg_extension ext
      WHERE ext.extname <> 'plpgsql')
+  -- FIX: user-created catalog objects in SYSTEM schemas carry normal OIDs
+  -- (>= 16384) regardless of owner, and previously only classes, types, and
+  -- procedures were counted — a superuser-created pg_catalog operator,
+  -- collation, conversion, or cast survived this gate untouched.
+  + (SELECT count(*) FROM pg_catalog.pg_operator o WHERE o.oid >= 16384)
+  + (SELECT count(*) FROM pg_catalog.pg_collation c WHERE c.oid >= 16384)
+  + (SELECT count(*) FROM pg_catalog.pg_conversion cv WHERE cv.oid >= 16384)
+  + (SELECT count(*) FROM pg_catalog.pg_cast cs WHERE cs.oid >= 16384)
   -- (the plpgsql extension comment is deliberately not compared: this
   -- image installs plpgsql with a NULL comment while pg_available_extensions
   -- advertises one, so comment equality is not a fresh-cluster invariant)
@@ -2037,8 +2047,12 @@ def wait_for_postgres(
                 timeout_seconds=_remaining_budget(deadline, runner.timeout_seconds),
                 exit_code=4,
             )
-            connection = _connect(source)
+            connection = _connect(
+                source, connect_timeout=_remaining_budget(deadline, 10)
+            )
             connection.close()
+            if time.monotonic() >= deadline:
+                raise BackupToolError("target PostgreSQL did not become ready", exit_code=4)
             return
         except BackupToolError:
             if time.monotonic() >= deadline:

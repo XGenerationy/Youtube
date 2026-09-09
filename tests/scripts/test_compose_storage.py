@@ -499,10 +499,7 @@ def _recovery_members(bundle: Path, archive: Path) -> list[Path]:
     git_revision = bundle / "git-revision.txt"
     service_record = bundle / "running-services.txt"
     database_dump.write_bytes(b"postgres-custom-format")
-    roles_dump.write_text(
-        "CREATE ROLE app_tenant;\nCREATE ROLE app_platform;\n",
-        encoding="utf-8",
-    )
+    roles_dump.write_bytes(b"CREATE ROLE app_tenant;\nCREATE ROLE app_platform;\n")
     database_manifest.write_text(
         json.dumps(
             {
@@ -512,16 +509,16 @@ def _recovery_members(bundle: Path, archive: Path) -> list[Path]:
                     {
                         "name": "database.dump",
                         "sha256": (
-                            "320b506c406da6e90ae0654737e9377d19f10df68371520"
-                            "b1279a4c7495c77a5"
+                            "320b506c406da6e90ae0654737e9377d19f10df68371520b"
+                            "1279a4c7495c77a5"
                         ),
                         "size": 22,
                     },
                     {
                         "name": "roles.sql",
                         "sha256": (
-                            "bc775661d3f85651a648df1149db3728fcdcf67b30"
-                            "0df0c791cdac2f55e43681"
+                            "bc775661d3f85651a648df1149db3728fcdcf67b300df0c7"
+                            "91cdac2f55e43681"
                         ),
                         "size": 50,
                     },

@@ -1176,17 +1176,38 @@ def _decoded_database_manifest(member: Path) -> dict[str, object]:
 def _require_manifested_artifacts_present(
     payload: dict[str, object], *, run_dir: Path
 ) -> None:
-    """Require every artifact the manifest describes to sit beside it."""
+    """Require every artifact the manifest describes to sit beside it, byte-exact.
+
+    The seal gate enforces the same strictness the restore path consumes:
+    each entry needs name, lowercase SHA-256, and non-negative size, and the
+    member on disk must match that size and digest — a named-but-altered or
+    metadata-stripped file is not recovery evidence.
+    """
     artifacts = payload.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         raise StorageContractError("database-manifest.json lists no artifacts")
     for artifact in artifacts:
-        if not isinstance(artifact, dict) or not isinstance(artifact.get("name"), str):
+        if (
+            not isinstance(artifact, dict)
+            or not isinstance(artifact.get("name"), str)
+            or not isinstance(artifact.get("sha256"), str)
+            or not isinstance(artifact.get("size"), int)
+            or isinstance(artifact.get("size"), bool)
+            or artifact["size"] < 0
+        ):
             raise StorageContractError("database-manifest.json artifact entry is malformed")
         member = run_dir / artifact["name"]
         if not member.is_file() or _is_redirect(member):
             raise StorageContractError(
                 f"database-manifest.json artifact is missing from the package: {artifact['name']}"
+            )
+        if member.stat().st_size != artifact["size"]:
+            raise StorageContractError(
+                f"database-manifest.json artifact size mismatch: {artifact['name']}"
+            )
+        if _sha256(member) != artifact["sha256"]:
+            raise StorageContractError(
+                f"database-manifest.json artifact digest mismatch: {artifact['name']}"
             )
 
 

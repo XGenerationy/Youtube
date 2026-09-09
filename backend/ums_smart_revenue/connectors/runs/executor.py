@@ -972,7 +972,6 @@ class ConnectorJobExecutor:
                 with self._session_factory() as session:
                     intent = aliased(AuditLogORM, name="connector_job_intent")
                     terminal = aliased(AuditLogORM, name="connector_job_terminal")
-                    intent_action = intent.details["action"].as_string()
                     terminal_action = terminal.details["action"].as_string()
                     terminal_exists = (
                         select(terminal.id)

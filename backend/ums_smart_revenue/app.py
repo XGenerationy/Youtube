@@ -191,6 +191,61 @@ def _defer_logging_restore_until_workers_finish(
 #   - File: backend/ums_smart_revenue/config/settings.py -> mode-aware currency resolver.
 #   - File: backend/ums_smart_revenue/tenancy/resolver.py -> database tenant rows.
 # ============================================================================
+
+def _shutdown_background_workers(
+    fastapi_app: FastAPI, logging_configuration: LoggingConfiguration
+) -> None:
+    """Close the scheduler then the executor, then release logging exactly once.
+
+    Scheduler first (stop ticking, so it can submit no further jobs), then
+    executor (drain in-flight workers) -- closing in the other order would
+    let a scheduler tick submit into an already-shutting-down pool. When a
+    bounded close leaves a survivor, a daemon completion watcher releases
+    output but retains the redaction-safety lease until both workers finish;
+    a fully clean shutdown restores logging inline. Exactly one branch owns
+    the restore.
+    """
+    shutdown_errors: list[Exception] = []
+    scheduler_clean = True
+    executor_clean = True
+    scheduler = getattr(fastapi_app.state, "group_sync_scheduler", None)
+    executor = getattr(fastapi_app.state, "connector_job_executor", None)
+    try:
+        if scheduler is not None:
+            try:
+                scheduler_clean = scheduler.close()
+            except Exception as exc:  # noqa: BLE001 — preserve after full cleanup
+                logger.exception("Group-sync scheduler close failed")
+                scheduler_clean = False
+                shutdown_errors.append(exc)
+        if executor is not None:
+            try:
+                executor_clean = executor.close()
+                if not executor_clean:
+                    logger.error(
+                        "Connector executor shutdown was not clean; durable "
+                        "submission intents will be reconciled at next startup"
+                    )
+            except Exception as exc:  # noqa: BLE001 — preserve after logging release
+                logger.exception("Connector executor close failed")
+                executor_clean = False
+                shutdown_errors.append(exc)
+    finally:
+        # FIX: A bounded-close survivor retains this lifespan's lease
+        # only until the explicit completion APIs observe every worker
+        # and scheduler thread exit. Exactly one branch owns restore.
+        if scheduler_clean and executor_clean:
+            restore_logging(logging_configuration)
+        else:
+            _defer_logging_restore_until_workers_finish(
+                configuration=logging_configuration,
+                scheduler=scheduler,
+                executor=executor,
+            )
+    if shutdown_errors:
+        raise ExceptionGroup("background worker shutdown failed", shutdown_errors)
+
+
 def create_app(*, database_url: str | None = None, authz_source: str | None = None) -> FastAPI:
     """Create the FastAPI application with optional SQL-backed authorization."""
     settings = load_app_settings(validate_tenant_currency=False)
@@ -248,47 +303,7 @@ def create_app(*, database_url: str | None = None, authz_source: str | None = No
                 scheduler.start()
             yield
         finally:
-            shutdown_errors: list[Exception] = []
-            scheduler_clean = True
-            executor_clean = True
-            scheduler = getattr(fastapi_app.state, "group_sync_scheduler", None)
-            executor = getattr(fastapi_app.state, "connector_job_executor", None)
-            try:
-                # Scheduler first (stop ticking), then executor (drain workers)
-                # -- see the Standards note above for why the order matters.
-                if scheduler is not None:
-                    try:
-                        scheduler_clean = scheduler.close()
-                    except Exception as exc:  # noqa: BLE001 — preserve after full cleanup
-                        logger.exception("Group-sync scheduler close failed")
-                        scheduler_clean = False
-                        shutdown_errors.append(exc)
-                if executor is not None:
-                    try:
-                        executor_clean = executor.close()
-                        if not executor_clean:
-                            logger.error(
-                                "Connector executor shutdown was not clean; durable "
-                                "submission intents will be reconciled at next startup"
-                            )
-                    except Exception as exc:  # noqa: BLE001 — preserve after logging release
-                        logger.exception("Connector executor close failed")
-                        executor_clean = False
-                        shutdown_errors.append(exc)
-            finally:
-                # FIX: A bounded-close survivor retains this lifespan's lease
-                # only until the explicit completion APIs observe every worker
-                # and scheduler thread exit. Exactly one branch owns restore.
-                if scheduler_clean and executor_clean:
-                    restore_logging(logging_configuration)
-                else:
-                    _defer_logging_restore_until_workers_finish(
-                        configuration=logging_configuration,
-                        scheduler=scheduler,
-                        executor=executor,
-                    )
-            if shutdown_errors:
-                raise ExceptionGroup("background worker shutdown failed", shutdown_errors)
+            _shutdown_background_workers(fastapi_app, logging_configuration)
 
     _app = FastAPI(
         title="UMS Smart Revenue Control Center API",

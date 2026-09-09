@@ -31,6 +31,7 @@ import time
 import weakref
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -872,6 +873,79 @@ class ConnectorJobExecutor:
             recovered += self._recover_tenant_submission_intents(tenant_id=tenant_id)
         return recovered
 
+
+    @staticmethod
+    def _recovery_intent_statement(
+        *,
+        tenant_id: UUID,
+        intent: Any,
+        terminal_exists: Any,
+        dialect: str,
+    ):
+        """Build the bounded anti-join batch of unrecovered submission intents."""
+        statement = (
+            select(intent)
+            .where(
+                intent.tenant_id == tenant_id,
+                intent.event_type == AuditEventType.CONNECTOR_JOB_RUN.value,
+                intent.request_id.is_not(None),
+                intent.details["action"].as_string() == _JOB_ACTION_SUBMITTED,
+                ~terminal_exists,
+            )
+            .order_by(intent.created_at, intent.id)
+            .limit(_JOB_RECOVERY_BATCH_SIZE)
+        )
+        if dialect == "postgresql":
+            statement = statement.with_for_update(of=intent, skip_locked=True)
+        return statement
+
+
+    def _record_recovered_intent(
+        self,
+        *,
+        sink: PlatformLaneAuditSink,
+        tenant_id: UUID,
+        intent_row: AuditLogORM,
+        request_id: str,
+    ) -> None:
+        """Append the durable failed-before-start edge for one recovered intent."""
+        details = dict(intent_row.details or {})
+        actor_user_id = intent_row.user_id or details.get("actor_user_id")
+        if actor_user_id is None:
+            raise RuntimeError(
+                "connector job intent is missing its durable actor identity"
+            )
+        connector_key = str(details.get("connector_key") or intent_row.scope_id or "")
+        account_id = str(details.get("account_id") or "")
+        report_month = str(details.get("report_month") or "")
+        if not connector_key or not account_id or not report_month:
+            raise RuntimeError(
+                "connector job intent is missing recovery scope metadata"
+            )
+        actor = self._build_audit_actor(
+            tenant_id=tenant_id,
+            actor_identity=ConnectorJobActor(
+                user_id=str(actor_user_id),
+                email="connector-job-recovery@service.ums.local",
+            ),
+        )
+        record_audit_event(
+            sink=sink,
+            actor=actor,
+            event_type=AuditEventType.CONNECTOR_JOB_RUN,
+            entity_type="api_connector",
+            entity_id=f"{connector_key}:{account_id}",
+            scope=AccessScope.connector(connector_key),
+            reason="recovered abandoned connector job submission",
+            request_id=request_id,
+            details={
+                "action": _JOB_ACTION_FAILED_BEFORE_START,
+                "report_month": report_month,
+                "error_class": "ExecutorShutdownRecovery",
+            },
+        )
+
+
     def _recover_tenant_submission_intents(self, *, tenant_id: UUID) -> int:
         """Reconcile one tenant's unmatched request_ids in bounded batches."""
         placeholder = make_placeholder_tenant(
@@ -910,23 +984,12 @@ class ConnectorJobExecutor:
                         )
                         .exists()
                     )
-                    intent_statement = (
-                        select(intent)
-                        .where(
-                            intent.tenant_id == tenant_id,
-                            intent.event_type == AuditEventType.CONNECTOR_JOB_RUN.value,
-                            intent.request_id.is_not(None),
-                            intent_action == _JOB_ACTION_SUBMITTED,
-                            ~terminal_exists,
-                        )
-                        .order_by(intent.created_at, intent.id)
-                        .limit(_JOB_RECOVERY_BATCH_SIZE)
+                    intent_statement = self._recovery_intent_statement(
+                        tenant_id=tenant_id,
+                        intent=intent,
+                        terminal_exists=terminal_exists,
+                        dialect=session.get_bind().dialect.name,
                     )
-                    if session.get_bind().dialect.name == "postgresql":
-                        intent_statement = intent_statement.with_for_update(
-                            of=intent,
-                            skip_locked=True,
-                        )
                     # app_tenant cannot lock audit_logs; use the sanctioned
                     # platform lane for the bounded lock acquisition, then
                     # retain those exact locks through the batch commit.
@@ -952,42 +1015,11 @@ class ConnectorJobExecutor:
                             # from subsequent batches without deleting audit.
                             continue
                         recovered_request_ids.add(request_id)
-                        details = dict(intent_row.details or {})
-                        actor_user_id = intent_row.user_id or details.get("actor_user_id")
-                        if actor_user_id is None:
-                            raise RuntimeError(
-                                "connector job intent is missing its durable actor identity"
-                            )
-                        connector_key = str(
-                            details.get("connector_key") or intent_row.scope_id or ""
-                        )
-                        account_id = str(details.get("account_id") or "")
-                        report_month = str(details.get("report_month") or "")
-                        if not connector_key or not account_id or not report_month:
-                            raise RuntimeError(
-                                "connector job intent is missing recovery scope metadata"
-                            )
-                        actor = self._build_audit_actor(
-                            tenant_id=tenant_id,
-                            actor_identity=ConnectorJobActor(
-                                user_id=str(actor_user_id),
-                                email="connector-job-recovery@service.ums.local",
-                            ),
-                        )
-                        record_audit_event(
+                        self._record_recovered_intent(
                             sink=sink,
-                            actor=actor,
-                            event_type=AuditEventType.CONNECTOR_JOB_RUN,
-                            entity_type="api_connector",
-                            entity_id=f"{connector_key}:{account_id}",
-                            scope=AccessScope.connector(connector_key),
-                            reason="recovered abandoned connector job submission",
+                            tenant_id=tenant_id,
+                            intent_row=intent_row,
                             request_id=request_id,
-                            details={
-                                "action": _JOB_ACTION_FAILED_BEFORE_START,
-                                "report_month": report_month,
-                                "error_class": "ExecutorShutdownRecovery",
-                            },
                         )
                     session.commit()
                     recovered += len(recovered_request_ids)

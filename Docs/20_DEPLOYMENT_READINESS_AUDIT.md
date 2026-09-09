@@ -8,14 +8,16 @@ localhost only**, operator-run, with **real** YouTube CMS revenue data.
 refute it. Those passes reversed or downgraded findings in every round; the
 corrections are recorded rather than quietly dropped.
 
-> ⚠️ **Freshness banner (2026-08-31).** PR #210 was merged only into the closed PR #209
-> branch; neither its head nor merge commit reached `main`. P0 **implementation** is
-> tracked on open, draft split PRs #221–#225 (P0-a…P0-e). This document is
-> the **pre-execution snapshot** at `main` = `d8418cea2`. Do **not** schedule unchecked
-> open items from this text alone. For scheduling work, use Docs/21 as maintained on
-> `main` after each P0 split merges (see [`25_PROGRAM_DEPENDENCY_GRAPH.md`](25_PROGRAM_DEPENDENCY_GRAPH.md)).
+> ⚠️ **Freshness banner (2026-08-31).** P0 **implementation** is tracked by current
+> successor PRs **#221–#225 (P0-a…P0-e)**. PR #210 is historical: it merged on
+> 2026-08-29 into the non-main `docs/deployment-readiness-audit` branch and is not
+> the source of truth on `main`. At this check, #221 and #225 are open/BLOCKED,
+> while #222–#224 are open/BEHIND; none is merged. This document
+> remains the **pre-execution snapshot** at `main` = `d8418cea2`. Do **not** schedule
+> unchecked open items from this text alone. For scheduling work, use Docs/21 as
+> maintained on `main` after each P0 split merges (see [`25_PROGRAM_DEPENDENCY_GRAPH.md`](25_PROGRAM_DEPENDENCY_GRAPH.md)).
 >
-> **Consolidation:** this file ships with Docs/21/23/24/25 in PR #220 / branch
+> **Consolidation:** this file ships with Docs/21/23/24/25 in branch
 > `docs/program-plans-consolidated` (supersedes closed drafts #209 / #218 / #219).
 
 - **Round 1 — deployment surface:** auth, secrets, data lifecycle, bootstrap, config.
@@ -43,14 +45,15 @@ corrections are recorded rather than quietly dropped.
 
 | Doc | Where | Role |
 | --- | --- | --- |
-| [`21_BETA_IMPLEMENTATION_PLAN.md`](21_BETA_IMPLEMENTATION_PLAN.md) | PR #220 (frozen snapshot) | Original costed beta plan at `d8418cea2`; Docs/25 + live GitHub own execution status |
-| Docs/22 backup rehearsal | P0-b / PR #222 | Backup/restore runbook; PR still open |
+| Docs/21 (living status) | P0 split PRs on `main` | P0 execution + current schedule |
+| Docs/22 backup rehearsal | P0-b split PR | Backup/restore runbook |
 | [`25_PROGRAM_DEPENDENCY_GRAPH.md`](25_PROGRAM_DEPENDENCY_GRAPH.md) | this PR | Execution DAG |
+| [`21_BETA_IMPLEMENTATION_PLAN.md`](21_BETA_IMPLEMENTATION_PLAN.md) | this PR (snapshot) | Original costed beta plan at `d8418cea2` |
 | [`23_ADMIN_ACCESS_AND_CONFIG_PLAN.md`](23_ADMIN_ACCESS_AND_CONFIG_PLAN.md) | this PR | Admin / access / config UI (Docs/21 is silent here) |
 | [`24_US_WITHHOLDING_AND_US_REVENUE_PLAN.md`](24_US_WITHHOLDING_AND_US_REVENUE_PLAN.md) | this PR | US revenue slice + withholding estimate (fills P3 rate gap) |
 
-**Residual proxy note:** PR #225 / P0-e adds `/org-units` and `/users`, but does **not**
-add `/security`. That route remains owned by Docs/23 A2; do not report it as #225 work.
+**Residual proxy note:** P0-e/#225 adds `/org-units` and `/users`; `/security` remains
+missing from `TENANT_SCOPED_ROUTES` and is owned by Docs/23 A2.
 
 ---
 
@@ -124,8 +127,10 @@ sizes everything above: *"USD facts, with the EGP bank settlement explained as F
 variance — acceptable for the beta, yes or no?"* The code has assumed "yes" since
 PR #42 without anyone saying so.
 
-**None of D1/D1b/D2 blocks the recommended beta**, which uses manual import (H5) and
-never calls Google.
+**D1/D1b do not block the recommended beta**, which never calls Google. D2 still
+defines the manual boundary: the beta may import only source-verified USD. The current
+request model cannot verify that unit itself, so Docs/21 P0.2a is a hard gate before
+real data; an EGP-only source cannot be pasted into `*_usd` fields and waved through.
 
 ### The deployment verdict (Round 1) still holds
 
@@ -174,21 +179,18 @@ from SQL and takes only identity from the header (`app.py:332`;
 **Fix:** set `UMS_AUTHZ_SOURCE=database` for the beta. This has a prerequisite —
 see H1 (the roles/permissions seed) — which is why it is not a one-line change.
 
-### B3 — Real revenue data requires a landed and rehearsed backup contract
-The audit baseline had no backup mechanism. The corrected P0-b stack adds a
-snapshot-consistent custom-format dump, strict semantic manifest, canonical
-NOLOGIN role SQL, identity-bound atomic publication, clean-target restore, and a
-throwaway rehearsal in `scripts/backup_database.py`,
-`scripts/restore_database.py`, and
-`Docs/22_BACKUP_RESTORE_AND_REHEARSAL.md`. P0-a's
-`scripts/compose_storage.py` remains the owner of the coordinated artifact/blob
-bundle and its outer checksum manifest.
+### B3 — Real revenue data has no backup, and a documented command destroys it
+No backup mechanism exists anywhere in the repo: `pg_dump` appears **only** as
+prose in `Docs/17_MULTI_TENANT_ARCHITECTURE.md` (a manual tenant-slice procedure) —
+there is no script in `scripts/`, `ci/`, or the `Makefile`.
+`Docs/01_IMPLEMENTATION_PLAN.md:1205` states it plainly: *"Backup/export retention —
+remaining: not started."* Meanwhile `docker-compose.yml:7` documents
+`docker compose down -v` as an ordinary teardown command — that deletes the
+`postgres-data` volume and every revenue fact in it, unrecoverably.
 
-This finding is not closed merely because the files exist on a branch. Before
-real data is ingested, land the corrected stack and retain evidence from one
-real migrated PostgreSQL backup and full throwaway restore. There is no
-non-empty-target override and no retention/prune automation; operator scheduling
-and retention policy remain explicit deployment work.
+**Fix before any real data is ingested:** a scheduled `pg_dump -Fc` writing to a
+**host** directory (not a container volume), plus one rehearsed restore. Until that
+exists, treat the beta database as disposable and re-importable.
 
 ### B4 — Export artifacts and connector blobs live on ephemeral container paths
 Generated workbooks/PDFs/slide packs default to the container's temp directory
@@ -201,7 +203,7 @@ and connector raw-file blobs default to `cwd/_local_blob_store`
 
 **Fix (container contract):** set the *inside-container* variables exactly to
 `UMS_EXPORT_ARTIFACT_DIR=/var/lib/ums/artifacts` and
-`UMS_LOCAL_STORE_ROOT=/var/lib/ums/blobs`. Bind host source
+`UMS_LOCAL_STORE_ROOT=/var/lib/ums/blobs`. Bind the host source
 `./data/ums:/var/lib/ums` on both `app` and `app-dev`; add the same mount to
 `migrate` only if that service writes artifacts or blobs. `./data/ums` is the
 host-side source path, not an environment-variable value inside the container.
@@ -211,12 +213,13 @@ mounted at the same `/var/lib/ums` target and verified to survive
 
 **Permission/persistence smoke before real data:** as the runtime user, verify
 both configured directories are readable and writable in `app` and the `app-dev`
-profile. Write one sentinel under each target, recreate with `docker compose down`
-(without `-v`) followed by `docker compose up` (and
-`docker compose --profile dev up app-dev` for the dev service), and verify both
-sentinels remain; clean them up after the check. Repeat for `migrate` only if its
-service receives the storage mount. Ignore `/data/ums/` in repo-root `.gitignore`
-before the first real write so private finance evidence cannot be staged.
+profile. Write one sentinel under each target, then recreate ONLY through the
+repository launcher — `python scripts/compose.py down` followed by
+`python scripts/compose.py up -d` (and `python scripts/compose.py --profile dev up
+app-dev` for the dev service), because raw `docker compose` up bypasses the
+launcher's child provisioning, image pinning, and storage-attestation boundaries —
+and verify both sentinels remain; clean them up after the check. Repeat for
+`migrate` only if its service receives the storage mount.
 
 ### B5 — There is no browser app in any non-dev path
 `frontend/` has no Dockerfile; compose has no frontend service; the backend mounts
@@ -265,6 +268,13 @@ header alone (`api/users.py:337,660-666`), and `create_user` requires no actor r
 Under `UMS_AUTHZ_SOURCE=database`, you must then use *that returned id* as your
 `X-User-ID`, or the principal lookup fails.
 
+**Fix:** order the first run as catalog seed → bootstrap stored user + split grants →
+setup-only truthful org/roster mapping attributed to that stored UUID → copy the UUID/
+email into the repo-root Vite gateway environment → enable database authz → session and
+fixture-write attribution smoke. The smoke proves both the fact's `imported_by` and
+`audit_logs.user_id` equal that UUID. The all-zero Vite fallback is never an actor for
+real-data work, and temporary header-mode setup never writes real revenue.
+
 ### H4 — Live Google ingestion has exactly one implemented secret backend
 Connector credentials are stored as *references only* — never secret material —
 which is the correct design (`db/security_models.py:388-398`;
@@ -285,7 +295,7 @@ Manager project reachable from this PC. **This does not block the beta** — see
 > confirms or contradicts this, and no repo artifact records GCP Secret Manager ever
 > being used. Treat the memory claim as unverified-by-code.
 
-### H5 — Real revenue can be ingested with no Google dependency (this is the beta path)
+### H5 — USD revenue can be ingested with no Google dependency (this is the beta path)
 `POST /revenue/facts` accepts a `connector_key` of `manual-upload` (or
 `manual_upload`) with `source_kind` `MANUAL_UPLOAD`
 (`api/revenue.py:197-206,1016`) — no credential row,
@@ -297,12 +307,13 @@ reconciliation source priority (`finance/reconciliation.py:13`), explanation lab
 (`api/channels.py:666-680`).
 
 **Limitation:** `/revenue/facts` is **one fact per request** — there is no bulk
-revenue CSV endpoint. A beta must use a resumable/idempotent loop and compare the
-expected revenue-required channel set with the persisted month facts after the final
-request; one successful 201 is not a complete-import proof. The request carries
-`*_usd` amounts and no source-currency field, so the runbook must also require evidence
-that every submitted value is already USD. Supplying EGP to a USD-labelled field would
-be accepted and would corrupt official totals; this path performs no FX conversion.
+revenue CSV endpoint. A beta must script the loop. More importantly,
+`RevenueFactImportRequest` accepts only `*_usd` amounts and carries no currency field
+or source-unit check (`api/revenue.py:386-402`): it will accept an EGP number and store
+it as USD if the caller lies by accident. Docs/21 P0.2a therefore requires an explicit
+USD source manifest/API assertion, a pre-write currency check, resumable idempotent
+replay, and an all-`revenue_required` post-import comparison. One 201 proves one row,
+not a complete or correctly denominated month.
 
 ---
 
@@ -395,20 +406,23 @@ These were checked and found correct — no action needed:
 ### Path A — Single-operator beta, manual import (recommended first step)
 The only user is the operator, on this PC, at `127.0.0.1`. No gateway is built; the
 Vite dev server injects the fixed operator identity. **Revenue enters by manual
-import, not by connector**, so Google is never called. Currency correctness still
-matters: the endpoint accepts USD-labelled values without a source-currency field.
-The operator must prove the source figures are already USD; entering EGP as USD is
-forbidden and no local conversion is permitted.
+import, not by connector** — so Google is never called. Currency still matters:
+the source report must explicitly identify USD, the import boundary must reject
+missing/mixed/non-USD units before its first write, and no UMS/client-side conversion
+is allowed. Supplying figures directly is not proof of their unit.
 
-Required before real data: **B3** (backups), **B4** (artifact volume — note the
-permanent-503 consequence), and the **logging fix** (one `basicConfig` call, so that
+Required before real data: **B3** (backups), **B4** (durable artifact/blob storage —
+note the permanent-503 consequence), and the **logging fix** (one `basicConfig` call, so that
 INFO-level connector progress is recorded and what already prints can be placed in
 time). B1/B2 are *accepted risks* documented in the runbook rather than fixed,
 justified solely by the localhost binding.
 
-Also needed: compose `.env` template, the `security_seed.sql` step (H1), a first-user
-recipe (H3), a reboot runbook (nothing restarts itself), and a written note that a
-connector-only month cannot be locked.
+Also needed: compose `.env` template, the `security_seed.sql` step (H1), the ordered
+stored-UUID/bootstrap/setup/cutover recipe (H3), a reboot runbook (nothing restarts
+itself), and a written note that a connector-only month cannot be locked. The real-data
+import is accepted only after the resumable loop compares the complete active roster,
+every active `revenue_required` channel, and the exact persisted `MANUAL_UPLOAD`
+fact/report-id/control totals (Docs/21 P0.2a).
 
 ### Path A+ — Path A plus live connector ingest
 *No longer blocked on a correctness defect* (see the retraction). Everything in
@@ -466,12 +480,10 @@ question they answer. Severities are the **post-refutation** ones.
   (`deduction_ingestion.py:604,611`) and printed by the CLI
   (`scripts/run_deduction_ingestion.py:196,204`). It is invisible in the API and UI
   only — still worth surfacing, but for a narrower reason than first stated.
-- **MEDIUM — the current currency selector is inert, and offers currencies the pipeline
+- **MEDIUM — the currency selector is inert, and offers currencies the pipeline
   rejects.** `AppShell.tsx:629-633` renders USD/EGP/AED with an uncontrolled
   `defaultValue` and no `onChange`, in a pipeline that skips non-USD source rows and
-  non-USD deductions and hard-fails non-USD exports. Hide/remove this misleading
-  implementation for the USD-only beta, but preserve `DESIGN.md`'s durable contract for
-  a real backend-backed month/currency/scope filter when multi-currency support exists.
+  non-USD deductions and hard-fails non-USD exports.
 - **MEDIUM — split-brain confidence:** `finance/reconciliation.py:139-141` halves a
   single-source channel's preview score to 0.5 while `explanations.py:498` reports
   the stored `1.0` (HIGH) for the same channel-month. Both ship.
@@ -576,7 +588,8 @@ question they answer. Severities are the **post-refutation** ones.
 1. An ordinary database interruption becomes an unexplained HTTP 500 with no log
    line explaining it (because of the logging finding).
 2. The container reports healthy while the database is dead (`/livez` checks nothing).
-3. A partially-completed manual import leaves a month that looks complete but isn't.
+3. A wrong-unit or partially-completed manual import leaves a month that looks
+   complete but is materially false/incomplete.
 4. A connector run interrupted by a reboot refuses to re-run for six hours.
 5. Slow burn: nothing is purged, nothing is vacuumed, no log rotation.
 
@@ -610,15 +623,14 @@ export, manage users) is denied, and so is every read gated on `VIEW_REVENUE`,
 `VIEW_FINALIZED_PAYMENTS`, or `VIEW_RAW_FILES`. **The product is being demonstrated
 by its most restricted role.**
 
-**Fix:** before database authz, use the existing `finance_admin` header role for the
-finance UI and existing `revenue_operations_admin` only for the manual-upload request.
-After P0-c + A5, use the setup-only `super_owner` (then disable/rotate it), or P0-c's
-atomic privileged bootstrap, to create the real principal with global `finance_admin`
-plus only a connector-scoped `connectors.run_jobs` grant for `manual-upload`. Use
-`corporate_admin` only for setup such as `POST /users` — `finance_admin` holds
-`roles.assign` but **not** `users.manage`; see Docs/23. This should be the first
-thing any beta runbook says, and its absence from the README is arguably the
-single highest-impact documentation gap here.
+**Fix:** an existing `finance_admin` header is enough for a read-only finance smoke,
+but not import. The least-privilege import identity is database-backed: existing
+`finance_admin@global` plus a separate direct
+`connectors.run_jobs@connector:manual-upload` grant. A global custom role cannot
+express that split, and header mode carries only one role/scope. Bootstrap first,
+copy the returned UUID/email into repo-root `.env`, enable database authz, then smoke;
+use `corporate_admin` only for setup actions requiring `users.manage` (see Docs/21 W0
+and Docs/23). This is an ordered P0-c/P0-e contract, not a one-line pre-bootstrap fix.
 
 > **Correction (Round 4).** An earlier revision of this section said to put that
 > line in `frontend/.env`. **That file is not read.** `vite.config.ts:41-51` pins
@@ -731,8 +743,9 @@ Recorded because they changed conclusions, and because the original wording woul
 have misled:
 
 1. **"Live ingestion is impossible without GCP Secret Manager" — reversed.** True
-   for *Google connectors*, but real revenue enters fine through manual import
-   (H5). The beta is not blocked on GCP.
+   for *Google connectors*, but source-verified USD revenue can enter through manual
+   import (H5). The beta is not blocked on GCP; it is still blocked on the USD and
+   whole-batch gates before real data.
 2. **"`roles`/`permissions` require hand-written SQL" — downgraded.** A maintained,
    idempotent seed file ships in-repo (H1); the defect is that nothing references
    it.
@@ -772,12 +785,11 @@ invalidates published *advice*; two are new findings the earlier rounds missed.
 
 Two further items worth carrying, found while costing but not defects in the audit:
 
-- **The baseline `pg_dump` idea did not include roles.** A restore into a fresh
-  container would fail on RLS policies referencing `app_tenant`/`app_platform`
-  (`20260608_0001_tenant_rls_enforcement.py:92-113`). The corrected P0-b design
-  resolves that historical finding with the tracked, password-free, two-role
-  `scripts/compose_restore_roles.sql`; broad `pg_dumpall --roles-only` capture is
-  deliberately prohibited.
+- **`pg_dump` does not dump roles.** A restore into a fresh container fails on the
+  RLS policies referencing `app_tenant`/`app_platform`
+  (`20260608_0001_tenant_rls_enforcement.py:92-113`). Without an accompanying
+  `pg_dumpall --roles-only`, backups look fine and are **unrestorable** — the worst
+  possible failure shape for B3.
 - **A test asserts a capability that does not exist.**
   `test_export_preview_api.py:632` promises the operator "can rehydrate the artifact
   out of band"; the artifact store has exactly one writer (`api/exports.py:245`).
@@ -792,7 +804,7 @@ Two further items worth carrying, found while costing but not defects in the aud
 | Gateway-asserted identity | `api/dependencies.py:77-120,139-158,181-189` |
 | Authz mode default | `config/settings.py:27,87-91`; `docker-compose.yml:23` |
 | No local auth | `db/security_models.py:38-78` (no password column) |
-| Baseline backups absent (superseded by B3 above) | `Docs/01_IMPLEMENTATION_PLAN.md:1205`; `docker-compose.yml:7` |
+| Backups absent | `Docs/01_IMPLEMENTATION_PLAN.md:1205`; `docker-compose.yml:7` |
 | Ephemeral artifacts | `reports/artifact_storage.py:13`; `orchestrator.py:3125`; `Dockerfile:109` |
 | Frontend serving | `frontend/vite.config.ts` (`server.proxy` only, routes `:13-32`) |
 | Roles seed | `backend/ums_smart_revenue/db/security_seed.sql` |

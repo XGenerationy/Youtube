@@ -2091,8 +2091,6 @@ def _terminate_tagged_backends(
     consecutive observations before returning, so a refusal never races a
     still-running mutation.
     """
-    import time as _time
-
     absent_streak = 0
     for _ in range(60):
         listing = runner.text(
@@ -2113,7 +2111,9 @@ def _terminate_tagged_backends(
                 f"--dbname={database}",
                 "-c",
                 "SELECT count(*) FROM pg_catalog.pg_stat_activity "
-                f"WHERE application_name = '{tag}' AND pid <> pg_backend_pid()",
+                "WHERE application_name = :'tag' AND pid <> pg_backend_pid()",
+                "-v",
+                f"tag={tag}",
             ],
             exit_code=4,
         )
@@ -2140,12 +2140,14 @@ def _terminate_tagged_backends(
                     "-c",
                     "SELECT pg_catalog.pg_terminate_backend(pid) "
                     "FROM pg_catalog.pg_stat_activity "
-                    f"WHERE application_name = '{tag}' "
+                    "WHERE application_name = :'tag' "
                     "AND pid <> pg_backend_pid()",
+                    "-v",
+                    f"tag={tag}",
                 ],
                 exit_code=4,
             )
-        _time.sleep(0.5)
+        time.sleep(0.5)
     raise BackupToolError(
         "timed-out restore mutation could not be proven stopped; inspect the "
         "target before retrying",

@@ -7,60 +7,61 @@ calculation"* and *"the project can see how much revinue from us per channel rig
 
 This document records the verified facts first (tax rules and what the codebase actually
 ingests today), then the program that adds per-channel US revenue and the withholding
-calculation as display/evidence surfaces. Gap/status-patched 2026-08-31.
+calculation as display/evidence surfaces. Gap-patched 2026-08-31 (live-thread recertification).
 
 ### Related plans (program bundle)
 
 | Doc / where | Role |
 | --- | --- |
-| [`20_DEPLOYMENT_READINESS_AUDIT.md`](20_DEPLOYMENT_READINESS_AUDIT.md) / [`21_BETA_IMPLEMENTATION_PLAN.md`](21_BETA_IMPLEMENTATION_PLAN.md) | Parent audit + frozen costing snapshot; P3 parks recon TAX |
+| [`20_DEPLOYMENT_READINESS_AUDIT.md`](20_DEPLOYMENT_READINESS_AUDIT.md) / [`21_BETA_IMPLEMENTATION_PLAN.md`](21_BETA_IMPLEMENTATION_PLAN.md) | Parent beta audit; P3 parked recon TAX (living status on P0 split PRs) |
 | [`25_PROGRAM_DEPENDENCY_GRAPH.md`](25_PROGRAM_DEPENDENCY_GRAPH.md) | Execution DAG |
-| P0-a…P0-e / #221–#225 | Open drafts, not merged; only current main-targeted P0 successors |
+| P0 split PRs (P0-a…P0-e; #221–#225) on `main` | Living P0 implementation; supersedes historical #210 |
 | [`23_ADMIN_ACCESS_AND_CONFIG_PLAN.md`](23_ADMIN_ACCESS_AND_CONFIG_PLAN.md) | Sibling admin program (independent) |
 
 > ⚠️ **D-U1 is blocking.** No estimate surfaces until the operator confirms the live
-> AdSense tax-info rate and records it in effective-dated config. **No default rate.**
+> AdSense tax-info rate and records it in PostgreSQL-backed, effective-dated config.
+> **No environment fallback and no default rate.**
 >
-> **Consolidation:** Docs/20/21/23/24/25 ship together in PR #220 / `docs/program-plans-consolidated`
+> **Consolidation:** Docs/20/21/23/24/25 ship together in `docs/program-plans-consolidated`
 > (supersedes closed drafts #209 / #218 / #219).
 
 ---
 
-## 0. The classification/rate ruling — the repository must not choose one
+## 0. The rate ruling — it is 15%, not 16%
 
 **The verified chain:**
 
-1. [Google's U.S. tax requirements](https://support.google.com/youtube/answer/10391362)
-   say withholding is determined from submitted tax information and that the applied rate
-   is visible under AdSense **Manage tax info**. The repository does not determine that
-   account-specific category or rate.
-2. [IRS Treaty Table 1](https://www.irs.gov/pub/irs-lbi/tax-treaty-table-1.pdf)
-   reports a rate for qualifying Egypt copyright royalties but marks film/TV `n/a`.
-   `n/a` is not an automatic 30% treaty rate and must not be translated into one.
-3. The [Egypt treaty](https://www.irs.gov/pub/irs-trty/egypt.pdf) and its
-   [IRS technical explanation](https://www.irs.gov/pub/irs-trty/egypttech.pdf) exclude
-   motion-picture films and radio/television films or tapes from the treaty's royalty
-   definition and route that classification to the business-profits article. The actual
-   treatment therefore depends on the account's facts and classification, not a hardcoded
-   film/TV fallback.
-4. [Google's tax-information guidance](https://support.google.com/youtube/answer/10390801)
-   directs the payee through the account-specific tax tool and recommends professional tax
-   advice. UMS records the resulting AdSense category/rate; it does not issue the ruling.
+1. Google withholds US tax **only on earnings from US viewers**, and only applies a reduced
+   rate when a valid tax form (W-8BEN-E for a business) is on file in AdSense. Withheld
+   amounts surface in the AdSense **payments transactions report**, usually the month after
+   the payment. (Google: "US tax requirements for YouTube earnings",
+   support.google.com/youtube/answer/10391362)
+2. The Egypt–United States income tax treaty caps royalty withholding at source. The IRS
+   treaty table row for Egypt reads **NA / 30 / 15 / NA / 15** across the five royalty
+   categories: industrial equipment NA, know-how **30%**, patent **15%**, motion
+   picture/TV **NA (no treaty reduction → default 30%)**, **copyright 15%**.
+   (irs.gov/pub/irs-trty/egypt.pdf; PwC treaty withholding tables.)
+3. YouTube/AdSense payments claim treaty benefit under the **copyright royalties** category
+   in the AdSense tax-info form. For a properly filed Egyptian entity the applicable rate is
+   therefore **15% of US-viewer earnings**.
 
 **The traps (why "check first" was the right instinct):**
 
-- Google's guidance describes generic no-valid-form/default-withholding outcomes that can
-  reach 30% of U.S.-source business earnings or 24% of worldwide individual earnings.
-  Those defaults are not an interpretation of the treaty table's film/TV `n/a` entry and
-  are never the repository's configured treaty rate.
-- Lapsed, incomplete, or changed tax information can change the displayed result. The
-  effective-dated record must be refreshed from AdSense when Google requests re-validation.
+- **Business account, no valid form on file** → default withholding is **30% on
+  US-source earnings only** (not worldwide).
+- **Individual account, no valid form** → backup withholding is **24% on total
+  worldwide earnings**.
+- **Lapsed/expired form** falls back to the same account-type default. The form has
+  to be re-validated when Google asks.
+- If a payment were classed under **motion picture/TV royalties**, Egypt's treaty gives NO
+  reduction (30%). The AdSense form shows which categories were claimed and at what rate.
 
 **Operator action (only Mahmoud can do this):** AdSense → Payments → Manage settings →
 "United States tax info" shows the exact per-category withholding rate Google is applying
-to this account right now. That displayed category and rate — not this document and not an
-interpretation of `n/a` — are what D-U1 records for the calculation. If the classification
-is unclear, consult a qualified tax professional before enabling the estimate.
+to this account right now. That number — not this document — is the rate the calculation
+must be configured with. For a properly filed Egyptian **business** entity under copyright
+royalties, the **expected** treaty rate is **15% of US-viewer earnings** — but only after
+D-U1 confirms the live page matches.
 
 **Honesty rule for everything below:** YouTube Analytics revenue metrics
 (`estimatedRevenue`) are **pre-withholding**. Any withholding figure UMS computes from
@@ -79,7 +80,7 @@ net finance math.
 | F2 | The YouTube Reporting (CSV) lane whitelists `content_owner_estimated_revenue_a1`, whose **daily rows already include `country_code`**. The adapter **deliberately drops** country (and video/day) when folding rows into monthly channel totals, to keep one source_row_key per channel-month. Raw CSV evidence is persisted before parsing. | `connectors/google/report_type_whitelist.py`; `connectors/runs/orchestrator.py` `_accumulate_csv_row` ("Lower-level official dimensions (video_id, country_code, etc.) are deliberately NOT forwarded") |
 | F3 | The AdSense payments lane is `accounts.payments.list` only — unpaid/scheduled **payment totals, no transaction line items**. **No withholding amount is ingested anywhere in UMS.** The Management API v2 does not expose the transactions detail; the withheld line lives in the AdSense UI report. | `connectors/google/adsense_payments_client.py`; `finance/adsense_payments.py` |
 | F4 | The YouTube Analytics API **does** support the needed shape: content-owner "user activity by country" report = `dimensions=country` + revenue metrics (`estimatedRevenue`) + exactly one `filters=channel==UC…`. Same per-channel loop as the 54-channel workbook (contentOwner queries still don't support `dimensions=channel`). | developers.google.com/youtube/analytics/content_owner_reports |
-| F5 | `source_row_key` hashes report_type/period/**dimensions**/currency, so country-dimensioned rows get distinct keys and cannot collide at upsert. That distinction alone does **not** prevent double projection: canonical selection still groups by channel/source and could choose a country row. The U2 non-projecting guard is what keeps country evidence out of channel-month totals. This is also why EGP sequencing matters (currency is in the hash). | `connectors/google_source_parsers/source_row_keys.py`; `finance/google_source_normalizer.py` |
+| F5 | `source_row_key` hashes report_type/period/**dimensions**/currency, so country-dimensioned rows get distinct keys and cannot collide at upsert. That key distinction alone does **not** prevent double projection: canonical selection still groups by channel/source and could choose a country row. The U2 non-projecting guard is what keeps country evidence out of channel-month totals. This is also why EGP sequencing matters (currency is in the hash). | `connectors/google_source_parsers/source_row_keys.py`; `finance/google_source_normalizer.py` |
 | F6 | **Existing recon already models a US-tax hop at 0.30.** `DEFAULT_US_WITHHOLDING_RATE = 0.30` in `finance/reconciliation_workflow.py` feeds a `us_view_share × gross × rate` component into net math. Today it is **dormant** (`NullUsViewShareProvider` → tax ≈ 0). Docs/21 P3 already says do not arm recon-derived TAX until the rate is known. | `finance/reconciliation_workflow.py`; Docs/21 P3; Docs/15 refine-later “withholding-rate calibration” |
 
 **Direct answers to the operator's questions:**
@@ -93,21 +94,18 @@ net finance math.
 
 **Fence on F6 (non-negotiable for this program):** U1–U4 do **not** rename, replace, or
 silently sync with `DEFAULT_US_WITHHOLDING_RATE`. The recon path stays dormant and out of
-scope. U3 reads an effective-dated PostgreSQL configuration row; **no matching row means
-suppress all estimate UI**. An environment scalar is not the configuration model and
-no treaty rate is hardcoded. Arming recon / `UsViewShareProvider` requires a
-**separate** finance ruling — not this plan.
+scope. U3 reads only the PostgreSQL effective-dated rate record described below; an
+environment scalar is not a historical configuration model. No matching row means
+suppress all estimate UI. Arming recon / `UsViewShareProvider` requires a **separate**
+finance ruling — not this plan.
 
 ---
 
 ## 2. The program — bands U1–U4
 
-Sequenced after the current P1 fleet (#211 merged; #212 open/non-draft/BLOCKED;
-#213–#216 open drafts) and coordinated with separate EGP Phase 1 draft/BLOCKED #217.
-The finance program is independent
-of the admin program
+Sequenced after the current fleet (#211–#217) and independent of the admin program
 ([`23_ADMIN_ACCESS_AND_CONFIG_PLAN.md`](23_ADMIN_ACCESS_AND_CONFIG_PLAN.md)). Parent
-context: Docs/21 (frozen costing snapshot; Docs/25 + live GitHub own execution status) P3
+context: Docs/21 (this PR snapshot; living status on P0 split PRs) P3
 “Reconciliation-derived TAX” pause. U2 must coordinate with the EGP program because both
 touch source-row identity.
 
@@ -128,84 +126,297 @@ decomposes the number we already trust, no drift). No writes, no UMS changes.
 
 ### U2 — Ingest the US slice (10–16h) — **blocked until normalization fence**
 
-**Required contract for pending PR #227:** U2 remains **blocked**. The captured #227
-head `e174c51f` requires redesign: it does **not** satisfy the typed non-projecting fence
-while preserving the allowlisted source-system contract. A redesigned successor must
-implement and test that behavior before merge. Even then, the fence is not U2 country
-ingestion and must not be marked as that feature.
+**Required contract for pending PR #227 (final SHA not yet supplied):** U2 remains
+**blocked**. The current PR is an implementation candidate, not shipped evidence.
+At the 2026-08-31 recertification it still has an unresolved P1 and unpushed changes;
+neither the remote intermediate head nor local-only bytes satisfy this gate.
+Only after the operator supplies the final reviewed SHA may this paragraph be changed
+to identify that exact SHA as satisfying the contract, and only if the focused tests
+and alert behavior below are verified at those bytes. Do not infer completion from an
+open PR title, intermediate head, or the old separate-source implementation.
 
-Country evidence stays on the allowlisted `source_system="youtube_analytics"`; do not
-invent a second source-system value without the full migration, parser/source allowlist,
-source-row-key, and audit-contract changes. The parser owns the dimension shape by
-emitting `raw_payload.dimensions` with a `country` key (alongside `channel`). Before
-[`GoogleSourceNormalizer._source_row_buckets`](../backend/ums_smart_revenue/finance/google_source_normalizer.py)
-groups by `(channel_id, source_system)`, the normalizer must detect that exact
-parser-owned shape, append a typed `NON_PROJECTING_EVIDENCE` skip, and not add the row
-to a canonical bucket. Existing worldwide `youtube_analytics` rows without a country
-key stay in the normal bucket and remain eligible for
-[`select_canonical_row`](../backend/ums_smart_revenue/finance/google_source_normalizer.py).
+The U2 acceptance gate includes the FETCH, not just the parse: the production
+`YouTubeAnalyticsRunner` path must issue the per-channel `dimensions=country`
+content-owner query (F4's user-activity-by-country shape), extending
+`_build_query_request` beyond the fixed `_DIMENSIONS = "month"` (F1) — a
+submission that only parses an already-country-shaped fixture while the production
+client still queries month-only does NOT satisfy this gate, and the focused tests
+must cover the extended request builder against the real query shape.
 
-Country rows remain persisted in source-row evidence with their distinct keys. The
-intentional skip remains auditable, but alert aggregation must exclude it from the
-generic defect count (or emit a separate informational lifecycle); a healthy U2 run
-must not produce a HIGH `SOURCE_ROWS_SKIPPED` alert merely because evidence was fenced.
+The cleanup must keep country evidence on the existing allowlisted
+`source_system="youtube_analytics"`; it must not invent a second source-system
+value. The parser must own the dimension shape by emitting
+`raw_payload.dimensions` with a `country` key (alongside `channel`). Before
+`_source_row_buckets` groups rows, the normalizer must detect that exact
+parser-owned shape, append
+`SkippedSourceRow(..., SkipReason.NON_PROJECTING_EVIDENCE)` to `result.skipped`,
+and not add the row to any canonical bucket. Existing `youtube_analytics` rows
+without a country key (including worldwide rows) must remain in the normal bucket.
+
+Country-dimensional rows must remain persisted in the source-row evidence table;
+the explicit `NON_PROJECTING_EVIDENCE` skip must reach the normal `ROWS_SKIPPED`
+audit summary **as non-actionable telemetry**. Existing alert code converts every
+positive skipped reason into a HIGH `SOURCE_ROWS_SKIPPED` alert
+(`finance/smart_alerts.py:_source_rows_skipped_alert`), and exports surface that alert.
+The alert signal must therefore remove `non_projecting_evidence` from actionable
+counts/reasons while retaining its raw audit count. A run containing only intentional
+country evidence emits no `SOURCE_ROWS_SKIPPED` alert; a mixed run alerts only on the
+remaining actionable reasons/count. This contract requires no new source-system
+allowlist, source-row migration, or key namespace. Any future evidence discriminator
+would need its full migration, parser/source allowlist, source-row-key, and audit-
+contract changes before it could be proposed. The existing channel-month canonical
+lane remains untouched.
+
+Worldwide and country Analytics rows also need compatible cleanup semantics: either
+one atomic run-level keep-set covers both shapes for the same content owner/month, or
+the source-row cleanup key gains a discriminator that prevents a country-only refresh
+from deleting worldwide rows and prevents a worldwide refresh from deleting country
+evidence. Distinct row hashes alone do not protect deferred stale cleanup.
+
+The filter belongs in the shared dashboard/export signal reader **before** sensitive-
+reason redaction. It subtracts only the explicit `non_projecting_evidence` count from
+the raw total and removes that key from the returned reason map; any positive unlabeled
+delta between `skipped_count` and the raw reason sum remains actionable fail-closed.
+Thus callers without `audit.view_sensitive_payloads` still receive the correct
+actionable total with an empty reason map, while the immutable audit row retains the
+original total and intentional reason count.
+
+Apply the same classification at the operator log boundary. An intentional-only run
+emits bounded INFO telemetry, not the current "dropped rows" WARNING. A mixed run emits
+a WARNING using only actionable counts/reasons plus separate bounded INFO telemetry for
+the intentional count. The raw `ROWS_SKIPPED` audit payload remains unchanged.
 
 **Acceptance criteria (U2):**
-- [ ] A redesigned #227 successor satisfying the typed-fence/source constraint is
-  reviewed and merged before U2; current head `e174c51f` does not satisfy this gate
-- [ ] Parser emits country rows with `source_system="youtube_analytics"` and
-  parser-owned `raw_payload.dimensions.country`
-- [ ] Country rows persist as evidence with distinct keys (F5), then receive the typed
-  non-projecting skip before canonical bucketing
-- [ ] Intentional evidence skips remain in audit telemetry but do not generate HIGH
-  missing-data alerts; true malformed/failed skips still alert
-- [ ] `GoogleSourceNormalizer` never selects country-dimensional rows for canonical facts;
-  removing the pre-bucket guard turns a test RED
+- [ ] Final PR #227 SHA is supplied and independently verified against this contract; until then this section remains pending, not shipped
+- [ ] Parser emits country rows with `source_system="youtube_analytics"` and parser-owned `raw_payload.dimensions.country`
+- [ ] Country rows persist as evidence with distinct keys (F5), then are skipped with `NON_PROJECTING_EVIDENCE`
+- [ ] `ROWS_SKIPPED` audit telemetry includes the explicit non-projecting reason/count
+- [ ] Intentional-only run produces no HIGH `SOURCE_ROWS_SKIPPED` dashboard/export alert; mixed run excludes intentional counts but retains actionable ones
+- [ ] Intentional-only run produces no dropped-row WARNING; mixed-run WARNING counts
+  only actionable skips while bounded INFO/audit telemetry retains intentional counts
+- [ ] Redacted and sensitive dashboard/export reads agree on the actionable total; an
+  unclassified positive delta remains HIGH rather than being subtracted accidentally
+- [ ] `GoogleSourceNormalizer` never selects country-dimensional rows for canonical facts; removing the pre-bucket guard turns the guard test RED
 - [ ] Full PG suite green; RLS-scoped reads
 
 **Sequencing tripwire:** if the EGP flip (currency change, which re-keys source rows) is
 scheduled, land U2 either clearly before or clearly after — never interleaved with — the
 EGP re-key, so evidence rows don't split across two currency generations mid-month.
 
-### U3 — Display + the calculation (6–10h) — **blocked until D-U1 + config service**
+### U3 — Display + the calculation — **re-cost required; blocked until D-U1 + config service**
+
+The former 6–10h estimate covered display/math only; it omitted the durable rate
+migration, API, audit, overlap concurrency, and historical-correction work now required.
 
 Per-channel panel/column: **US revenue**, **US share of channel revenue**, and
 **estimated US withholding** — **only when** an effective-dated, operator-confirmed rate
-exists in PostgreSQL for the revenue month (and payment account when multiple accounts
-can differ). **No matching row → suppress estimate fields entirely** (fail-closed; no
-silent treaty-rate default). Rate validated 0 ≤ rate ≤ 0.30 when recorded. PR #228 currently
-provides only an open ORM/repository scaffold and has an Alembic-head collision with
-#223; it must be restacked after #223 and integrated behind an audited service/API before
-U3 can be called implemented.
+exists in PostgreSQL. An environment variable is one mutable current scalar and cannot
+reproduce an older month's estimate after the rate changes.
+
+Add tenant-scoped `us_withholding_rates` records with: `id`, `tenant_id`, non-blank
+`source_account_id`, allowlisted `income_category` (the initial value is
+`youtube_copyright_royalty`), decimal `rate`, inclusive `effective_from_month`, exclusive
+nullable `effective_to_month`, operator/source-report reference, confirmation provenance
+modeled as audited revisions — the CURRENT confirmation carries a bounded
+validity window sized to the tax-form review cadence, evaluated against each
+estimate's covered earnings month: an estimate for a month inside the
+confirmed interval resolves from the persisted rate/confirmation revision
+that covered it, so historical recomputation never changes or loses its
+evidence. A reconfirmation appends a NEW audited revision; timestamps are
+never updated in place. A month covered by no currently-valid confirmation
+computes no NEW estimate (absent) without invalidating historical revisions,
+`created_by`, creation reason, one-time interval-close actor/reason/time, `revoked_by`,
+revoke reason, and created/revoked timestamps. Enforce 0 ≤ rate ≤ 0.30, valid `YYYY-MM`
+intervals, and no overlapping active interval for the same tenant/account/category with
+a database constraint or a same-key serialized transaction that is race-tested on
+PostgreSQL. Authorization for every effective-dated rate mutation (create,
+forward-close, retroactive replacement) requires authority over the COMPLETE
+affected month interval -- checking only the submitting principal's single
+`{adsense_account_id}:{YYYY-MM}` grant is insufficient, because one month's grant
+must not be able to move estimates for months outside it. Rate maintenance may
+instead be gated at a dedicated account-configuration scope value
+`adsense-account:{adsense_account_id}` — which the same U3 constraint migration
+must add to `ck_access_scopes_scope_type` alongside `adsense-account-month` —
+or by a global administrator, and
+the implementation must test the partial-interval grant rejection. A forward-effective change locks the current open interval, sets its
+previously-null exclusive end once with audit provenance, and inserts the next row in
+one transaction; rate, source, account/category, and start are immutable, so older
+months keep the same rate-record id. A retroactive correction revokes/supersedes the
+affected interval and appends explicit replacement interval(s), preserving the old row
+and its reason. Month lookup requires **exactly one** matching account/category
+interval. Zero or multiple matches fail closed and suppress estimate fields.
+The account is resolved per channel through the effective
+`ContentOwnerChannelLinkORM` → verified `AdsenseContentOwnerLinkORM` bridge for the
+same tenant/month. Missing, expired, unverified, or ambiguous mappings fail closed
+instead of applying another account's rate.
 
 Every figure is labeled "estimated"; the panel links the §0 explanation.
 
+**Zero/missing semantics are typed, not inferred:**
+
+- country evidence missing → `us_revenue=null`, `us_share=null`, estimate absent,
+  `share_status="MISSING_COUNTRY_EVIDENCE"`;
+- worldwide revenue missing → `us_share=null`, estimate absent,
+  `share_status="MISSING_WORLDWIDE_REVENUE"`;
+- worldwide revenue = 0 and US revenue = 0 → `us_share=null` (never `0%` and never a
+  divide), `share_status="NOT_APPLICABLE_ZERO_WORLDWIDE"`; a zero estimate may be
+  emitted only when the US zero is source-backed and an effective rate exists;
+- worldwide revenue = 0 with positive US revenue, or US revenue greater than positive
+  worldwide revenue → no share/estimate and `share_status="INCONSISTENT_EVIDENCE"`;
+- only positive worldwide revenue with source-backed US evidence produces a decimal
+  share. Absence is never coerced to zero.
+
 **Backend-only estimate (AGENTS / finance rule):** the backend emits the labeled estimate
-fields (US revenue, share, estimated withholding, rate used, confidence/source tokens).
-The SPA **renders** those fields — it must **not** compute `US × rate` in the browser.
-Display only: nothing feeds net revenue, allocation, close, or reconciliation (F6 fence).
+fields (US revenue, nullable share + status, estimated withholding, rate record id/rate,
+effective interval, account/category, currency, confidence/source tokens). The SPA
+**renders** those fields — it must **not** compute `US × rate` in the browser. Display
+only: nothing feeds net revenue, allocation, close, or reconciliation (F6 fence).
+The US-share denominator must come from evidence compatible with the country numerator:
+same channel/content owner, metric, currency, period, and compatible report generation
+(preferably the sum of that country response). A mismatch returns a typed provenance
+mismatch state rather than dividing by a headline worldwide fact from a different lane.
+Exports must define canonical serialized fields for US revenue, US share/status,
+estimated withholding, rate id/rate, currency, source tokens, and confidence, or
+explicitly exclude them with a typed evidence reason; the SPA cannot be the only place
+where reviewed finance values exist.
+Withholding-rate and estimate mutation/read APIs require explicit authorization. The
+implementation must add a withholding-specific permission (or explicitly reuse a named
+finance write permission) and an enforceable `ScopeType.ADSENSE_ACCOUNT_MONTH`
+representation before seeding grants. The scope id is the canonical
+`{adsense_account_id}:{YYYY-MM}` pair, resolved from the tenant-scoped
+`AdsenseContentOwnerLinkORM`/payment account rather than a browser-supplied account id;
+global grants are reserved for audited break-glass roles only. Missing scope, malformed
+scope id, cross-account/month mismatch, and scope-storage errors fail closed before any
+rate or estimate mutation. Tests must cover missing, insufficient, cross-account,
+wrong-month, malformed-scope, and storage-failure paths.
 
 **Acceptance criteria (U3):**
-- [ ] PostgreSQL stores append-only/effective-dated operator confirmations with actor,
-  source/account context, and month-based lookup; no environment scalar is authoritative
-- [ ] With no confirmed rate row for the month/account, estimate fields absent from API
-- [ ] With confirmed rate, backend returns labeled estimate fields only
-- [ ] Zero worldwide revenue returns `share=null` with typed reason
-  `ZERO_WORLDWIDE_REVENUE`; missing worldwide evidence returns `share=null` with a
-  distinct missing-data reason—neither path divides by zero or reports 0% as fact
+- [ ] PostgreSQL rate migration/repository/API are tenant-scoped, audited, non-overlapping, and append/revoke historical corrections
+- [ ] No environment/default fallback; zero or multiple rate rows for the month suppress estimate fields and fail closed
+- [ ] Recomputing an old month resolves the same persisted rate record and provenance
+  after a later **forward-effective** rate change; a retroactive correction changes it
+  only through an explicit revoke/replace audit trail
+- [ ] Zero/missing/inconsistent revenue cases return the typed nullable semantics above; no divide-by-zero and no missing-as-zero
+- [ ] With one confirmed effective rate resolved through the channel→content-owner→AdSense bridge, backend returns labeled estimate fields and rate-record provenance only
+- [ ] Numerator/denominator provenance must match; mismatches return a typed status and no share/estimate
+- [ ] Export/API contracts preserve the new finance values and their source/confidence tokens
+- [ ] Authorization gates are explicit and fail closed for missing, insufficient, cross-account, wrong-month, malformed-scope, and storage-failure cases
+- [ ] Permission seeding includes the concrete account/month scope type and rejects grants whose scope id is not the canonical account/month pair
 - [ ] SPA renders backend fields; no client-side withholding math
 - [ ] Recon `DEFAULT_US_WITHHOLDING_RATE` (0.30) unchanged and dormant
 
-### U4 — Actual-withholding anchor (4–8h, optional, operator decision)
+### U4 — Actual-withholding anchor — **optional; re-cost required**
 
-The actual withheld amount is UI-only (F3), so U4 adds a typed PostgreSQL record and a
-small manual-entry surface (or CSV drop) for the per-payment withheld line from the
-AdSense payments transactions report, plus a delta view: estimated (U3) vs actual. The
-record carries tenant, AdSense/payment account, payment identifier/month, amount,
-currency, source-report reference, actor, required reason, and timestamps. Corrections
-are append-only and link to the superseded record; no silent overwrite. Record + audit
-commit atomically, and locked/closed-period handling is explicit. Until U4, this remains
-a monthly manual glance at the AdSense report—no durable anchor exists yet.
+The former 4–8h estimate covered a small manual UI/CSV drop only; it omitted durable
+revision persistence, tenant/payment constraints, idempotency, locks, and race tests.
+
+The actual withheld amount is available only in the AdSense UI report (F3), so U4 adds
+a durable manual-entry/CSV boundary plus a delta view: estimated (U3) vs actual. It is
+not component state or an overwriteable setting.
+
+Persist tenant-scoped `us_withholding_actuals` revisions with a composite
+`(tenant_id, payment_id)` FK to the existing `adsense_payments` row plus income
+category. Because payment sync updates amount, currency, source-report id, and payment
+metadata in place, each actual revision also snapshots the payment amount, currency,
+source report/version, payment name, account id, payment month, covered earnings
+period used for comparison, and the payment status used for eligibility; otherwise the
+FK is only a mutable pointer. The repository admits `PAID`, `PENDING`, `UNPAID`, and
+`CANCELLED`, and sync updates `payment_status` in place, so an anchor may be written
+only while the locked payment holds a finalized `PAID` status — validated in the same
+transaction that locks it — and reads must suppress the estimated-vs-actual delta
+(returning `delta=null` with a typed `PAYMENT_NOT_FINALIZED` status) whenever the
+parent payment is no longer finalized. Store a
+non-negative finite actual withheld amount/currency, non-blank AdSense transaction-
+report reference, optional durable artifact hash/reference, client idempotency key,
+entered_by/reason/created_at, `supersedes_id`, and revoked_by/reason/at. Require the
+anchor currency to match the payment; never convert it in U4. A PostgreSQL partial
+unique index enforces one active revision per payment/category; a permanent tenant-
+scoped unique idempotency key returns one result even after later revocation, while all
+revision rows remain as history.
+
+`adsense_payments.id` is currently the sole primary key; U4 must also add the redundant
+parent uniqueness on `(tenant_id, id)` required by that composite tenant FK. This is a
+constraint-only parent-table change, not a payment-row backfill. PostgreSQL does not
+index foreign-key columns automatically, and the partial active-revision unique index
+cannot serve general FK lookups, so the migration must also create a non-partial btree
+index on the child columns `(tenant_id, payment_id)`; revoked history stays in the
+table, and payment updates or FK checks must not scan it sequentially.
+
+`POST /adsense/payments/{payment_id}/withholding-actuals` and its CSV service are
+financially significant writes and are gated by the same withholding-write
+permission and account/month scope rules as the rate and estimate APIs --
+and, exactly like effective-dated rate mutations, authorization must cover
+the COMPLETE covered earnings month set, not merely the submitting month:
+a principal authorized for January cannot submit a January-February actual
+that moves February's delta. The account-level configuration scope
+(`adsense-account:{id}`) satisfies the gate for the whole set. The
+acceptance criteria include missing-permission, insufficient-scope,
+partial-interval, cross-account, and storage-failure rejections. They use one transaction whose
+lock order must match a refactored `sync_payments` exactly -- the covered
+finance-month rows first in sorted order, then the payment rows. The current
+`SqlAlchemyAdSensePaymentRepository.sync_payments` interleaves one month lock
+with one payment upsert, so the U4 implementation PR must first refactor both
+writers onto this single total order (or document and test a proven compatible
+order) before the deadlock claim holds. Inside that
+transaction the mutation locks and validates the payment plus current active
+revision, marks that prior revision inactive, inserts the new row pointing to it,
+and appends the audit event. A
+replay with the same idempotency key returns the same committed revision; a key reused
+with different content fails closed. There is no DELETE or in-place amount edit. The
+mutation must normalize the actual's covered earnings period into a deterministic month
+set before writing: a single-month report produces one covered month; a multi-month
+report expands to every inclusive `YYYY-MM` in the covered period. The month locks are taken first with the same lock primitive used by close/unlock
+and in the same sorted order AdSense payment sync uses, serializing against
+concurrent close/unlock and payment-sync writers, and the insert or correction is
+rejected if **any** covered earnings month is locked even when the payment month is
+later and still open. If the AdSense report or CSV row cannot prove the covered earnings
+months, the mutation fails closed instead of falling back to `adsense_payments.month`.
+The operator must use the existing audited unlock workflow, append the correction with a
+new reason/source reference, and re-lock.
+
+Ingestion requires the actual's income_category to be one of the
+allowlisted categories, and reads return revision provenance and a
+backend-computed estimated-vs-actual delta **only when both values carry the
+same currency, the actual's income_category EXACTLY equals the U3
+rate/estimate's category (a copyright actual never deltas against a
+motion-picture estimate; a mismatch returns `delta=null` with a typed
+`CATEGORY_MISMATCH` status), and the actual's covered earnings period/account
+aggregation matches the U3 estimate period**; the SPA renders that value and performs no
+finance math. Existing historical rows without a trustworthy covered period can be
+returned for audit visibility, but they return no delta and cannot be corrected
+in place -- correction always proceeds by supplying the covered month set through a
+new revision, so history stays immutable while the latest revision remains
+correctable. Missing estimate data returns
+`delta=null` with a typed missing-estimate status. The confidence token
+promised for US revenue and the derived estimate has one defined derivation:
+it aggregates the country evidence rows' source quality (report kind and
+freshness), the denominator-compatibility check, and the rate-confirmation
+state into a single label computed backend-side, and the formula is pinned by
+API and export tests -- an implementation must not label it arbitrarily
+(country evidence rows stay `ParsedSourceRow` records without their own
+persisted confidence field). A currency mismatch returns
+`delta=null` with `CURRENCY_MISMATCH_NO_FX`, preserving both source amounts without
+conversion. The comparison remains reproducible after restart. All withholding arithmetic
+(share, estimate, actual, delta) uses one canonical calculation order: decimal
+inputs are exact, intermediate values carry full precision, and every persisted
+or returned money value is quantized once at the persistence/serialization
+boundary to six decimal places with `ROUND_HALF_UP`, matching the existing
+finance contract; API and export implementations must not emit unquantized
+values, and boundary plus export tests must pin the rounding. This is the only way to
+catch a silently lapsed W-8 (actual jumps to 24/30% while the estimate stays 15%). Until
+U4, that check is a monthly manual glance at the AdSense payments report.
+
+**Acceptance criteria (U4):**
+- [ ] Migration, tenant RLS, repository/service, typed API/CSV validation, and audit reason are present
+- [ ] Anchor references an existing account/payment and source report; currency mismatch and unknown payment fail closed
+- [ ] Anchors are written only against a locked `PAID` payment, snapshot its status, and reads suppress the delta with typed `PAYMENT_NOT_FINALIZED` once the parent leaves the finalized state
+- [ ] A non-partial `(tenant_id, payment_id)` btree index backs child FK checks and payment-update scans
+- [ ] Anchor snapshots mutable payment fields and records the covered earnings period; no delta is emitted when period/account linkage is absent or incompatible
+- [ ] Retry is idempotent; correction appends/supersedes and preserves prior revision;
+  concurrent writers leave one active revision
+- [ ] Locked month rejects insert/correction until audited unlock; restart preserves the same actual-vs-estimated comparison
+- [ ] Backend emits the actual-vs-estimated delta and provenance only for same-currency
+  values; missing/mismatched inputs return typed null and the SPA performs no subtraction
 
 ---
 
@@ -215,27 +426,63 @@ a monthly manual glance at the AdSense report—no durable anchor exists yet.
   enters net finance math, close, allocation, or reconciliation without its own ruling.
   In particular: do **not** wire U2/U3 into `UsViewShareProvider` or change
   `DEFAULT_US_WITHHOLDING_RATE` (0.30) from this program (F6).
-- **T-U2** The display-estimate rate is **effective-dated configuration with no default**.
-  No matching PostgreSQL row → no estimate surfaces. It is **not** an environment scalar
-  or a silent rename of the recon constant (0.30).
+- **T-U2** The display-estimate rate is a **PostgreSQL effective-dated record with no
+  default or environment fallback**. Missing/overlapping account-month configuration
+  suppresses estimates. It is **not** a silent rename of the recon constant (0.30).
 - **T-U3** Country-dimensioned rows never feed the monthly-totals lane (no double count);
-  enforced by the U2 non-projecting guard. Distinct source-row keys (F5) prevent upsert
-  collisions only; they are not a projection guard.
+  enforced by the U2 non-projecting guard. Distinct source_row_key dimensions (F5)
+  prevent upsert collisions only; they are not a projection guard.
+- **T-U3a** `NON_PROJECTING_EVIDENCE` remains audit telemetry but is excluded from
+  actionable `SOURCE_ROWS_SKIPPED` counts. Intentional country evidence is not a HIGH
+  defect; genuine skipped reasons remain HIGH and visible in dashboard/exports.
 - **T-U4** No FX anywhere in this program (standing rule); US revenue is displayed in the
   source currency of the row, full stop.
 - **T-U5** U2 respects EGP-program sequencing (currency is inside source_row_key).
 - **T-U6** Official estimate math lives in the backend; the SPA does not calculate
   withholding locally.
+- **T-U7** Missing/zero/inconsistent denominators use the typed nullable share states in
+  U3; no divide-by-zero, missing-as-zero, or misleading 0%.
+- **T-U8** U4 actuals are payment-linked append-only revisions; account/month lock and
+  audit rules are never bypassed for a convenient manual scalar.
+- **T-U9** U4 never computes a cross-currency delta. Currency mismatch is a typed null,
+  not an invitation to add client-side or provider-derived FX.
 
 ## 4. Operator decisions
 
-- **D-U1 (blocking U3):** Read the actual category/rate from AdSense → Payments →
-  "United States tax info"; record account type and confirmed result in effective-dated
-  config. If the page shows a fallback or the classification is unclear, review the tax
-  information with Google and a qualified adviser before enabling estimates. **No
-  estimate UI until D-U1 is recorded.**
+- **D-U1 (blocking U3):** Read the actual per-category rate from AdSense → Payments →
+  "United States tax info"; record account type (business vs individual) and confirmed
+  rate/source reference in the effective-dated PostgreSQL row for the exact AdSense
+  account/category. If the page shows 24%/30% fallback, stop and fix the tax form before
+  enabling estimates. **No estimate UI until D-U1 is recorded.**
 - **D-U2:** Where the US panel lives (Rankings view column vs. per-channel detail panel) —
   design is the operator's per the standing rule; the plan only commits the numbers.
 - **D-U3:** Whether U4 (manual actual-withholding anchor) is worth building now or stays a
   monthly manual check in the AdSense UI.
 - **D-U4:** Store full country breakdown in U2 (recommended, same cost) or the US row only.
+
+## 5. Migration and blast-radius statement
+
+- **No migration/backfill required for the U2 projection fence itself.** Country rows
+  stay in the existing source-row table/source-system/key namespace. The alert filter is
+  read-model behavior; raw `ROWS_SKIPPED` audit telemetry is preserved.
+- **Confirmed migration required for U3:** replace the `ck_access_scopes_scope_type`
+  check constraint (currently allowlisting only `global`, `sector`, `company`,
+  `channel`, `finance-month`, `export`, and `connector`) so the prescribed
+  `adsense-account-month` AND `adsense-account` scope values can be seeded, with paired
+  migration and rollback tests proving the constraint transition; the same U3 change
+  must extend every runtime consumer of scope types — principal loading, scope
+  parsing/validation, and the authorization allowlists — so the new values are
+  loadable and enforceable, not merely storable, and the U3 completion gates cover
+  BOTH scope values (month-scoped estimate reads and account-scoped rate
+  maintenance) with missing/insufficient-scope tests for each; add `us_withholding_rates` with tenant RLS,
+  account/category/effective-interval constraints, serialized overlap protection, and
+  create/close/revoke audit provenance. No existing month is backfilled with a guessed
+  rate; estimates remain absent until D-U1 rows exist.
+- **Confirmed migration required for U4:** add `us_withholding_actuals` revisions linked
+  to `adsense_payments` by tenant/payment FK, with tenant RLS, one-active-revision and
+  idempotency constraints, source reference, and supersession history; add parent
+  uniqueness on `adsense_payments(tenant_id, id)` for the composite FK. No historical
+  actual is fabricated.
+- PostgreSQL remains the sole source of truth. U3/U4 are display/evidence only: no
+  allocation, close, net, reconciliation, or export finance result changes unless a
+  later, separately reviewed ruling explicitly authorizes them.

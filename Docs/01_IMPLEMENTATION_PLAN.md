@@ -1202,15 +1202,13 @@ and the reconciled-net content (Phase 4 allocation/tax) feeding report bodies.
   (PR #8) plus the `CHANNELS_MISSING_REVENUE_FACTS` per-channel coverage check
   (PR #98, active+revenue_required channels with no monthly fact); broader
   quality checks not built.
-- ⏳ Backup/export retention — P0-a/P0-b implementation now exists on the
-  corrected integration stack: `scripts/compose_storage.py` owns the coordinated
-  artifact/blob bundle, while `scripts/backup_database.py` and
-  `scripts/restore_database.py` own an atomic semantic PostgreSQL package and
-  clean-target rehearsal (`Docs/20_COMPOSE_STORAGE_RUNBOOK.md`,
-  `Docs/22_BACKUP_RESTORE_AND_REHEARSAL.md`). There is intentionally no automated
-  deletion/retention command. The beta blocker remains open until these changes
-  land on `main` and the exact operational backup passes one real disposable
-  PostgreSQL restore rehearsal.
+- ⏳ Backup/export retention — remaining: not started. **Audited 2026-08-24 and
+  raised to a beta BLOCKER** (`Docs/20_DEPLOYMENT_READINESS_AUDIT.md`, B3): no
+  `pg_dump` script exists anywhere in the repo, while `docker-compose.yml:7`
+  documents `docker compose down -v` as an ordinary teardown — that deletes the
+  `postgres-data` volume and every revenue fact in it. Must be fixed before real
+  CMS data is ingested. Export artifacts are separately at risk (B4): they default
+  to the container temp dir with no volume mounted.
 - ✅ **RETRACTED 2026-08-25 — "Analytics revenue currency is fabricated as USD."**
   This entry previously carried a 🔴 blocker claiming live ingest would record EGP
   amounts as USD. **That was wrong.** `currency` on YouTube Analytics `reports.query`
@@ -1257,15 +1255,16 @@ and the reconciled-net content (Phase 4 allocation/tax) feeding report bodies.
   the compose stack ships no gateway), the default `headers` authz mode lets a
   caller assert their own role, no database backup, ephemeral artifact storage,
   and no non-dev path to serve the browser app. Two viable beta shapes are
-  documented there; real revenue can be ingested without any Google/GCP
-  dependency via the first-class `MANUAL_UPLOAD` import path.
-  **Freshness (2026-08-31):** PR #210 was merged only into the now-closed PR #209
-  branch; neither its head nor its merge commit reached `main`. Living P0 execution is
-  therefore the still-open, non-draft split fleet: #221 (P0-a), #222 (P0-b), #223
-  (P0-c), #224 (P0-d), and #225 (P0-e). Docs/20–21/23/24/25 ship together in PR #220
-  (supersedes closed drafts #209/#218/#219). Do not mark a P0 band implemented until
-  its successor PR is merged to `main`, and do not schedule unchecked items from the
-  Docs/21 costing snapshot alone.
+  documented there; source-verified USD revenue can be ingested without any Google/GCP
+  dependency via the first-class `MANUAL_UPLOAD` path, but Docs/21 P0.2a now blocks
+  real data on a USD manifest/preflight plus resumable complete-roster/exact-fact-set
+  verification.
+  **Freshness (2026-08-31):** P0 execution + living Docs/21 status track current successor
+  PRs **#221–#225 (P0-a…P0-e)** on main. PR #210 is historical: it merged into the
+  non-main `docs/deployment-readiness-audit` branch and is not the mainline source of
+  truth. Docs/20–21/23/24/25 ship together on branch
+  docs/program-plans-consolidated (supersedes closed drafts #209/#218/#219). Do not
+  schedule unchecked P0 items from the Docs/21 snapshot alone.
 - ⏳ Google credential token monitoring — remaining: credentials repo (PRs #33, #34) +
   four `api_connector_credentials` refresh-telemetry columns (last-attempt,
   token-expiry, last-status, last-error-class) stamped at the

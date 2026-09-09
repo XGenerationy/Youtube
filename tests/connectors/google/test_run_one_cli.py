@@ -153,7 +153,7 @@ def test_cli_main_returns_2_when_database_url_missing(
 
         database_url = None
 
-    def _load_stub_settings() -> _StubSettings:
+    def _load_stub_settings(**_kwargs) -> _StubSettings:
         """Return the stub settings the CLI under test reads."""
         return _StubSettings()
 
@@ -245,7 +245,7 @@ def _patch_cli_runtime(module, monkeypatch: pytest.MonkeyPatch, db_session: Sess
 
         database_url = "sqlite+pysqlite:///:memory:"
 
-    def _load_stub_settings() -> _StubSettings:
+    def _load_stub_settings(**_kwargs) -> _StubSettings:
         """Return the stub settings the CLI under test reads."""
         return _StubSettings()
 
@@ -336,7 +336,7 @@ def test_cli_main_returns_2_when_credential_missing(
 
         database_url = "sqlite+pysqlite:///:memory:"
 
-    def _load_stub_settings() -> _StubSettings:
+    def _load_stub_settings(**_kwargs) -> _StubSettings:
         """Return the stub settings the CLI under test reads."""
         return _StubSettings()
 
@@ -586,7 +586,7 @@ def test_cli_main_returns_2_when_tenant_lifecycle_rejected(
 
         database_url = "sqlite+pysqlite:///:memory:"
 
-    def _load_stub_settings() -> _StubSettings:
+    def _load_stub_settings(**_kwargs) -> _StubSettings:
         """Return the stub settings the CLI under test reads."""
         return _StubSettings()
 

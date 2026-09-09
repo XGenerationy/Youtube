@@ -96,8 +96,9 @@ _SERVICE_ACCOUNT_EMAIL = "google-connectors@service.ums.local"
 #            when env unset, see config/settings.py); the fail-closed
 #            boundary lives here at first emit, not at app boot, so
 #            non-connector workloads can still load settings without this
-#            env set. The principal is a frozen dataclass; immutability
-#            mirrors the rest of the authorization layer.
+#            env set. The settings read explicitly defers the unrelated
+#            headers-only currency check. The principal is a frozen dataclass;
+#            immutability mirrors the rest of the authorization layer.
 # Blast Radius: Audit actor identity for connector runs. No effect on finance
 #               numbers, scope checks (the orchestrator already gated the
 #               request), or the Neo4j projection.
@@ -126,7 +127,7 @@ def build_connector_service_principal(*, tenant_id: UUID) -> UserPrincipal:
             Subclasses ``GoogleConnectorError`` so orchestrator and executor
             failure catches classify it as a pre-start failure.
     """
-    settings = load_app_settings()
+    settings = load_app_settings(validate_tenant_currency=False)
     actor_id = settings.google_connector_service_actor_id
     if actor_id is None:
         raise ConnectorServicePrincipalUnavailableError(

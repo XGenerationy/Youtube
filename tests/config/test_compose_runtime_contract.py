@@ -25,7 +25,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _COMPOSE_PATH = _PROJECT_ROOT / "docker-compose.yml"
 _DOCKERFILE_PATH = _PROJECT_ROOT / "Dockerfile"
 _LOG_LEVEL_EXPRESSION = "${UMS_LOG_LEVEL:-INFO}"
-_SERVER_GRACEFUL_TIMEOUT_SECONDS = 10.0
+_SERVER_GRACEFUL_TIMEOUT_SECONDS = 10.0  # mirror of the Dockerfile CMD flag
 
 
 def _load_compose() -> dict[str, object]:
@@ -56,7 +56,11 @@ def test_app_stop_grace_period_covers_connector_close_budgets() -> None:
     )
 
     dockerfile = _DOCKERFILE_PATH.read_text(encoding="utf-8")
-    assert '"--timeout-graceful-shutdown", "10"' in dockerfile
+    graceful_flag = (
+        '"--timeout-graceful-shutdown", "'
+        f'{int(_SERVER_GRACEFUL_TIMEOUT_SECONDS)}'
+    )
+    assert graceful_flag in dockerfile
     app_dev_command = services["app-dev"]["command"]
     timeout_flag_index = app_dev_command.index("--timeout-graceful-shutdown")
     assert app_dev_command[timeout_flag_index + 1] == "10"

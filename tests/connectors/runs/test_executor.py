@@ -41,11 +41,18 @@ from ums_smart_revenue.tenancy.models import TenantStatus
 
 
 def _exactly_one(items):
-    """Return the one expected item; a dry iterator fails the test."""
+    """Return the SINGLE expected item; dry or surplus iterators fail.
+
+    Consumes the iterator fully: zero matches and any second match both
+    raise, so a fixture that under- or over-provisions cannot pass silently.
+    """
     try:
-        return next(items)
+        first = next(items)
     except StopIteration as exc:
-        raise AssertionError("expected one more canned item; got none") from exc
+        raise AssertionError("expected exactly one item; got none") from exc
+    rest = list(items)
+    assert not rest, f"expected exactly one item; got extras: {rest[:3]}"
+    return first
 
 
 TENANT = UUID(UMS_TENANT_ID)
@@ -902,7 +909,13 @@ def test_close_logs_worker_exception_from_done_futures(tmp_path, caplog) -> None
         if "Connector job worker raised during executor close drain" in record.getMessage()
     ]
     assert matching, caplog.text
-    assert any(record.exc_info is not None for record in matching)
+    # The redaction filter (when a prior test leaves logging configured)
+    # legitimately strips exc_info after folding the redacted summary into
+    # the message, so accept either the raw exc_info or the redacted marker.
+    assert any(
+        record.exc_info is not None or "[exception=" in record.getMessage()
+        for record in matching
+    )
 
 
 def test_close_reports_unclean_while_immediate_shutdown_audit_is_outstanding(

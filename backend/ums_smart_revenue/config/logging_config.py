@@ -562,7 +562,10 @@ def _safe_dict_key(key: object) -> object:
     """Redact one structured-extra key to a log-safe form."""
     if isinstance(key, (int, float, bool, type(None))):
         return key
-    return _redact_log_text(key)
+    try:
+        return _redact_log_text(key)
+    except Exception:  # noqa: BLE001 — the logging path must never raise
+        return f"<unredactable-key:{type(key).__name__}>"
 
 
 def _redacted_for_key(key: object, nested: object) -> object:
@@ -572,30 +575,40 @@ def _redacted_for_key(key: object, nested: object) -> object:
         return _REDACTED
     if key_kind == "sql":
         return "[REDACTED-SQL]"
-    return _redact_structured_value(nested)
+    try:
+        return _redact_structured_value(nested)
+    except Exception:  # noqa: BLE001 — the logging path must never raise
+        return f"<unredactable-value:{type(nested).__name__}>"
 
 
 def _redact_structured_value(value: object) -> object:
-    """Recursively sanitize values carried by structured ``extra`` fields."""
-    if isinstance(value, str):
-        return _redact_log_text(value)
-    if isinstance(value, BaseException):
-        return redact_exception_summary(value)
-    if isinstance(value, dict):
-        return {
-            _safe_dict_key(key): _redacted_for_key(key, nested)
-            for key, nested in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_structured_value(nested) for nested in value]
-    if isinstance(value, tuple):
-        return tuple(_redact_structured_value(nested) for nested in value)
-    if isinstance(value, set):
-        return {_redact_structured_value(nested) for nested in value}
-    if isinstance(value, frozenset):
-        return frozenset(_redact_structured_value(nested) for nested in value)
-    return _redact_log_text(value)
+    """Recursively sanitize values carried by structured ``extra`` fields.
 
+    The walk is guarded at every recursion entry: a logging call carrying a
+    hostile __repr__/property must degrade to a placeholder rather than raise
+    through the logging pipeline.
+    """
+    try:
+        if isinstance(value, str):
+            return _redact_log_text(value)
+        if isinstance(value, BaseException):
+            return redact_exception_summary(value)
+        if isinstance(value, dict):
+            return {
+                _safe_dict_key(key): _redacted_for_key(key, nested)
+                for key, nested in value.items()
+            }
+        if isinstance(value, list):
+            return [_redact_structured_value(nested) for nested in value]
+        if isinstance(value, tuple):
+            return tuple(_redact_structured_value(nested) for nested in value)
+        if isinstance(value, set):
+            return {_redact_structured_value(nested) for nested in value}
+        if isinstance(value, frozenset):
+            return frozenset(_redact_structured_value(nested) for nested in value)
+        return _redact_log_text(value)
+    except Exception:  # noqa: BLE001 — the logging path must never raise
+        return f"<unredactable:{type(value).__name__}>"
 
 def fingerprint_log_identifier(value: str) -> str:
     """Return a process-local keyed label for a sensitive identifier."""

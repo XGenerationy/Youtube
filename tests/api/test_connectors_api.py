@@ -70,11 +70,18 @@ from ums_smart_revenue.tenancy.constants import UMS_TENANT_ID
 
 
 def _exactly_one(items):
-    """Return the one expected item; a dry iterator fails the test."""
+    """Return the SINGLE expected item; dry or surplus iterators fail.
+
+    Consumes the iterator fully: zero matches and any second match both
+    raise, so a fixture that under- or over-provisions cannot pass silently.
+    """
     try:
-        return next(items)
+        first = next(items)
     except StopIteration as exc:
-        raise AssertionError("expected one more canned item; got none") from exc
+        raise AssertionError("expected exactly one item; got none") from exc
+    rest = list(items)
+    assert not rest, f"expected exactly one item; got extras: {rest[:3]}"
+    return first
 
 
 USER_ID = UUID("00000000-0000-0000-0000-000000004001")
@@ -182,6 +189,10 @@ class _FakeExecutor:
         """Record the durable activation-failure handoff."""
         self.audit_failure_calls.append(kwargs)
         return True
+
+    def recover_abandoned_submission_intents(self) -> int:
+        """Record that startup recovery ran; the fake recovers nothing."""
+        return 0
 
     def close(self) -> None:
         """Mirror the production executor lifecycle used by app shutdown."""

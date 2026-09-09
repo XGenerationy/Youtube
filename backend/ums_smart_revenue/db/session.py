@@ -1,27 +1,10 @@
-# ============================================================================
-# Purpose: SQLAlchemy engine and session-factory helpers with per-URL engine
-#   caching, one-slot SQLite checkout serialization, and Postgres RLS role hooks.
-# Database/ORM: All ORM models (engine is the shared connection source); Session
-#   factories mark tenant vs platform lanes via session.info.
-# Standards: typed boundaries; no error swallowing; SQLite is test/dev-only;
-#   Postgres pool_pre_ping and dual-lane role switching unchanged.
-# Blast Radius: DB connection topology and transaction discipline. SQLite's
-#   one-slot pool is test/dev-only; Postgres authorization/RLS is untouched.
-# Connections:
-#   - File: backend/ums_smart_revenue/app.py -> request + platform factories.
-#   - File: backend/ums_smart_revenue/auth/users.py -> savepoint retries rely on
-#     real SQLite BEGIN so RELEASE does not commit.
-#   - File: scripts/bootstrap_operator.py -> one-transaction operator bootstrap.
-# ============================================================================
 """SQLAlchemy engine and session-factory helpers with per-URL engine caching."""
 
 from collections.abc import Callable, Iterator
-from threading import Lock, get_ident
+from threading import Lock
 from typing import Any
-from weakref import ReferenceType, WeakKeyDictionary, ref
 
 from sqlalchemy import Connection, Engine, create_engine, event
-from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import QueuePool
 
@@ -44,57 +27,39 @@ _PLATFORM_LANE_ACTIVE_KEY = "ums_platform_lane_active"
 _engine_cache: dict[str, Engine] = {}
 _engine_cache_lock = Lock()
 
-_SQLITE_OWNER_ENGINE_KEY = "ums_sqlite_owner_engine"
-_sqlite_owner_lock = Lock()
-_sqlite_session_owners: WeakKeyDictionary[
-    Engine,
-    tuple[ReferenceType[Session], int],
-] = WeakKeyDictionary()
-
 
 # ============================================================================
-# Purpose: Refuse a same-thread second SQLite Session before it asks the
-#   one-slot QueuePool for another connection. A blocking checkout on the
-#   thread that owns the only live transaction can never make progress; more
-#   importantly, the refusal must happen before SQLAlchemy creates a second
-#   checkout fairy that could reset the shared DBAPI connection.
-# Database/ORM: SQLite Session/Engine ownership metadata only; no table access.
-# Standards: Fail fast with SQLAlchemy's typed InvalidRequestError. Other
-#   threads still wait at QueuePool, and Postgres Session behavior is unchanged.
-# Blast Radius: SQLite test/dev transaction lifecycle only. The owning
-#   transaction is neither committed nor rolled back by the rejected Session.
+# Purpose: Open the request-owned physical SQLite transaction before route
+#   services can enter repository SAVEPOINTs. The engine begin hook emits the
+#   one real BEGIN when this helper forces a connection checkout.
+# Database/ORM: All SQLite-backed request writes; no table or model changes.
+# Standards: Caller-owned transaction boundary; SQLite-only compatibility;
+#   PostgreSQL keeps its implicit BEGIN plus RLS after_begin hook unchanged.
+# Blast Radius: SQLite request atomicity; authorization/audit writes roll back
+#   together on handled route errors without changing PostgreSQL behavior.
 # Connections:
-#   - File: backend/ums_smart_revenue/db/session.py -> build_session_factory
-#     selects this class only for SQLite engines.
-#   - File: tests/db/test_session_tenant_hook.py -> pins pre-checkout refusal
-#     and owner-transaction preservation.
-# =====================================================================# ============================================================================
+#   - File: backend/ums_smart_revenue/api/dependencies.py -> request session owner.
+#   - File: backend/ums_smart_revenue/auth/users.py -> nested account SAVEPOINTs.
+# ============================================================================
 def begin_request_transaction(session: Session) -> None:
     """Establish the physical outer transaction for one SQLite request."""
     if session.get_bind().dialect.name != "sqlite":
         return
-    # FIX: PR #223 proved that a request-level Session marker without a
-    # physical BEGIN lets RELEASE SAVEPOINT commit early under pysqlite legacy
-    # mode. PR #224 already owns physical BEGIN in the engine event recipe, so
-    # forcing checkout here invokes exactly that hook; issuing another raw
-    # BEGIN here would instead fail with "cannot start a transaction within a
-    # transaction".
+    # FIX: The engine begin hook owns the raw BEGIN. Forcing checkout invokes
+    # it exactly once; issuing BEGIN here as well would collide with the active
+    # transaction. The one-slot QueuePool keeps other Sessions from reaching
+    # the physical connection until this request returns it.
     session.begin()
     session.connection()
 
 
 # ============================================================================
 # Purpose: Build the per-URL SQLAlchemy Engine. SQLite (test-only) uses a
-#   one-slot QueuePool so only one checkout can touch its persistent DBAPI
-#   connection at a time. Postgres (production) keeps the normal connection
-#   pool so the dual-lane design hands the tenant lane and the privileged
-#   app_platform/audit lane DISTINCT role-switched connections.
+#   one-slot QueuePool so independent Sessions cannot overlap on one physical
+#   connection. Postgres keeps the normal pool and distinct role-switched lanes.
 # Database/ORM: All ORM models (engine is the shared connection source).
-# Standards: typed boundary; no error swallowing; pool_pre_ping retained.
-#   SQLite engines additionally get real BEGIN discipline (see
-#   _enable_sqlite_transactional_savepoints below) so SAVEPOINTs nest instead
-#   of committing. QueuePool checkout exclusivity serializes independent
-#   Sessions without inferring ownership from ambiguous StaticPool events.
+# Standards: typed boundary; no error swallowing; SQLite transaction recipe;
+#   PostgreSQL pool_pre_ping retained.
 # Blast Radius: DB connection topology. SQLite branch is test-only; Postgres
 #   path is intentionally unchanged so RLS role switching is not weakened.
 # Connections:
@@ -103,16 +68,11 @@ def begin_request_transaction(session: Session) -> None:
 def build_engine(database_url: str) -> Engine:
     """Create an Engine; SQLite serializes one connection, others use defaults."""
     if database_url.startswith("sqlite"):
-        # FIX: SQLite permits only ONE writer at a time. The request session and
-        # the audit/platform session bind to the same engine but, under the
-        # default pool, could each grab a DISTINCT DBAPI connection -> the audit
-        # INSERT on connection #2 blocks on the request's open write txn on
-        # connection #1 ("database is locked"). A one-slot QueuePool retains one
-        # connection (including for :memory:) and prevents overlapping checkout
-        # generations entirely. This is stronger than a StaticPool BEGIN lock:
-        # StaticPool reset/checkin events expose only one reused ConnectionRecord,
-        # so a stale fairy can roll back a newer transaction. Postgres needs
-        # distinct role-switched connections, so this branch is SQLite-only.
+        # FIX: StaticPool reissued one live DBAPI connection to overlapping
+        # Session fairies. A second request's failed BEGIN/rollback could erase
+        # the first request's write while the first later reported commit. A
+        # one-slot QueuePool retains one connection (including for :memory:)
+        # but withholds it until its current owner finishes reset/checkin.
         engine = create_engine(
             database_url,
             poolclass=QueuePool,
@@ -126,55 +86,31 @@ def build_engine(database_url: str) -> Engine:
 
 
 # ============================================================================
-# Purpose: Make SAVEPOINTs REAL on SQLite. pysqlite's legacy isolation mode
-#   emits BEGIN only before DML, never before SELECT or SAVEPOINT, so a
-#   ``Session.begin_nested()``
-#   entered while the DBAPI sits in autocommit starts ITS OWN SQLite-level
-#   transaction — and the RELEASE on clean exit DURABLY COMMITS it. Every
-#   savepoint-wrapped write in this codebase (the auth/users.py storage-retry
-#   envelope, the audit sinks, the channel-registry write boundary) therefore
-#   committed EARLY on SQLite, silently breaking one-transaction envelopes:
-#   scripts/bootstrap_operator.py promised "the whole run is one transaction"
-#   while a failure AFTER a savepointed account write left the account
-#   half-created (parent-verified red test
-#   test_bootstrap_reports_a_database_failure_instead_of_a_traceback). This is
-#   the SQLAlchemy-documented pysqlite recipe: stop the DBAPI from managing
-#   transactions and emit BEGIN ourselves whenever SQLAlchemy begins one, so
-#   savepoints nest inside a real outer transaction and RELEASE releases
-#   instead of committing.
-#   Independent Sessions serialize at the one-slot QueuePool checkout boundary.
-#   Unlike StaticPool, QueuePool never hands one ConnectionRecord to overlapping
-#   checkout fairies, eliminating ambiguous reset/checkin ownership and stale
-#   rollback races. A checkout may safely cross threads because pysqlite's
-#   check_same_thread guard is disabled for this test/dev-only engine.
-# Database/ORM: Engine-level transaction discipline for every SQLite session;
-#   no table, column, or query change.
-# Standards: Documented dialect recipe (SQLAlchemy "Serializable isolation /
-#   Savepoints / Transactional DDL" for pysqlite). Postgres path untouched —
-#   psycopg already emits BEGIN, so its savepoints were always real.
-# Blast Radius: SQLite (test/dev-only per build_engine) transaction semantics:
-#   reads now open a real deferred transaction that holds its snapshot until
-#   commit/rollback/close; concurrent Sessions wait for the sole checkout. No
-#   authorization, finance, or Postgres behavior.
+# Purpose: Make SQLite SAVEPOINTs nest under a real outer transaction. sqlite3
+#   legacy mode does not BEGIN for SELECT/SAVEPOINT, so RELEASE can otherwise
+#   become an early durable commit that caller rollback cannot undo.
+# Database/ORM: Engine transaction discipline only; no table/model changes.
+# Standards: SQLAlchemy pysqlite transaction recipe; parameter-free control
+#   SQL; PostgreSQL path is untouched.
+# Blast Radius: SQLite test/dev transactions now hold their outer transaction
+#   until commit/rollback and independent Sessions serialize at pool checkout.
 # Connections:
-#   - File: backend/ums_smart_revenue/auth/users.py -> _run_with_storage_retries
-#     relies on RELEASE not committing to keep the bootstrap atomic.
-#   - File: scripts/bootstrap_operator.py -> the one-transaction guarantee.
-#   - File: backend/ums_smart_revenue/app.py -> executor/scheduler share this
-#     engine's session_factory on SQLite test apps.
-# =====================================================================
+#   - File: backend/ums_smart_revenue/auth/users.py -> savepoint retries.
+#   - File: scripts/bootstrap_operator.py -> one-transaction bootstrap.
+# ============================================================================
+def _enable_sqlite_transactional_savepoints(engine: Engine) -> None:
+    """Emit real SQLite BEGINs so SAVEPOINT/RELEASE cannot commit early."""
+
     @event.listens_for(engine, "connect")
     def _disable_pysqlite_transaction_management(
         dbapi_connection: Any, _connection_record: Any
     ) -> None:
-        """Disable pysqlite auto-BEGIN so SAVEPOINT nests under our begin hook."""
-        # Legacy-autocommit mode: pysqlite stops emitting implicit BEGINs
-        # entirely; the begin hook below owns transaction starts instead.
+        """Disable sqlite3 auto-BEGIN so the engine hook owns transaction start."""
         dbapi_connection.isolation_level = None
 
     @event.listens_for(engine, "begin")
     def _emit_begin(connection: Connection) -> None:
-        """Emit an explicit BEGIN for every SQLAlchemy outer transaction."""
+        """Open the physical transaction whenever SQLAlchemy begins an outer one."""
         connection.exec_driver_sql("BEGIN")
 
 
@@ -182,12 +118,11 @@ def build_engine(database_url: str) -> Engine:
 # Purpose: Build the default app tenant-lane session factory. Sessions produced
 #   here opt into the Postgres RLS role hook through session.info; raw SQLAlchemy
 #   Sessions used by migrations/tests remain owner sessions unless explicitly
-#   marked. SQLite concurrent Sessions serialize at the one-slot pool checkout;
-#   the HTTP dual-lane path still reuses one request Session via
-#   ``_sqlite_platform_session_from_request``.
+#   marked. SQLite Sessions serialize at the one-slot checkout boundary; the
+#   HTTP platform/audit lane still reuses its request Session.
 # Database/ORM: SQLAlchemy Session factory metadata only.
 # Standards: explicit role marker; no ambient global role changes for unmarked
-#   sessions; SQLite checkout serialization scoped to the SQLite engine only.
+#   sessions; SQLite checkout serialization stays engine-owned.
 # Blast Radius: Authorization/RLS role selection at the DB boundary (Postgres
 #   path); SQLite transaction-isolation discipline (test-only).
 # Connections:
@@ -209,16 +144,11 @@ def build_session_factory(database_url: str, engine: Engine | None = None) -> Se
     # `_sqlite_platform_session_from_request` in `app.py` so the platform lane
     # reuses the request session (the same Session object), which removes the
     # multi-Session contention that would otherwise need SAVEPOINT isolation.
-    # Independent background Sessions (executor/scheduler) serialize at the
-    # one-slot QueuePool checkout boundary.
+    # Independent Sessions serialize at QueuePool checkout.
     # Postgres keeps the default ("conditional_savepoint") because each
     # Session gets a distinct pooled connection with its own outer transaction.
-    session_class: type[Session] = (
-        _SQLiteSerializedSession if engine.dialect.name == "sqlite" else Session
-    )
     return sessionmaker(
         bind=engine,
-        class_=session_class,
         autoflush=True,
         expire_on_commit=False,
         info={_SESSION_ROLE_KEY: APP_TENANT_ROLE},

@@ -68,82 +68,7 @@ _sqlite_session_owners: WeakKeyDictionary[
 #     selects this class only for SQLite engines.
 #   - File: tests/db/test_session_tenant_hook.py -> pins pre-checkout refusal
 #     and owner-transaction preservation.
-# ============================================================================
-class _SQLiteSerializedSession(Session):
-    """Session that rejects a self-deadlocking second SQLite checkout."""
-
-    def get_bind(self, *args: Any, **kwargs: Any) -> Engine | Connection:
-        """Resolve the bind, then reject a same-thread non-owner Session."""
-        bind = super().get_bind(*args, **kwargs)
-        engine = bind if isinstance(bind, Engine) else bind.engine
-        if engine.dialect.name != "sqlite":
-            return bind
-
-        with _sqlite_owner_lock:
-            owner = _sqlite_session_owners.get(engine)
-            if owner is None:
-                return bind
-            owner_session = owner[0]()
-            if owner_session is None or not owner_session.in_transaction():
-                _sqlite_session_owners.pop(engine, None)
-                return bind
-            if owner_session is not self and owner[1] == get_ident():
-                # FIX: QueuePool correctly prevents a second physical checkout,
-                # but waiting for its timeout on the thread that must release
-                # the sole owner is a guaranteed self-deadlock. Reject before
-                # Engine.connect() creates a second fairy; the rejected Session
-                # consequently has no DBAPI handle it could reset or roll back.
-                raise InvalidRequestError(
-                    "a second SQLite Session cannot acquire the connection on "
-                    "the thread that owns the active transaction"
-                )
-        return bind
-
-
-@event.listens_for(_SQLiteSerializedSession, "after_begin")
-def _record_sqlite_session_owner(
-    session: Session,
-    transaction: Any,
-    connection: Connection,
-) -> None:
-    """Record the Session/thread after its real SQLite checkout begins."""
-    if connection.dialect.name != "sqlite" or transaction.parent is not None:
-        return
-    engine = connection.engine
-    with _sqlite_owner_lock:
-        _sqlite_session_owners[engine] = (ref(session), get_ident())
-    session.info[_SQLITE_OWNER_ENGINE_KEY] = engine
-
-
-@event.listens_for(_SQLiteSerializedSession, "after_transaction_end")
-def _release_sqlite_session_owner(session: Session, transaction: Any) -> None:
-    """Forget the exact owner when its outer Session transaction ends."""
-    if transaction.parent is not None:
-        return
-    engine = session.info.pop(_SQLITE_OWNER_ENGINE_KEY, None)
-    if not isinstance(engine, Engine):
-        return
-    with _sqlite_owner_lock:
-        owner = _sqlite_session_owners.get(engine)
-        if owner is not None and owner[0]() is session:
-            _sqlite_session_owners.pop(engine, None)
-
-
-# ============================================================================
-# Purpose: Open the request-owned physical SQLite transaction before route
-#   services can enter repository SAVEPOINTs. SQLAlchemy's Session transaction
-#   marker alone is insufficient under pysqlite legacy transaction behavior;
-#   forcing the checkout invokes this module's engine ``begin`` hook, which
-#   emits the one physical BEGIN without duplicating it.
-# Database/ORM: All SQLite-backed request writes; no table or model changes.
-# Standards: Caller-owned transaction boundary; SQLite-only compatibility;
-#   PostgreSQL keeps implicit BEGIN and its RLS after_begin hook unchanged.
-# Blast Radius: SQLite request atomicity. Account and audit writes remain in
-#   one outer transaction and roll back together on handled route failures.
-# Connections:
-#   - File: backend/ums_smart_revenue/db/session.py -> SQLite begin event recipe.
-#   - File: backend/ums_smart_revenue/auth/users.py -> repository SAVEPOINTs.
-# ============================================================================
+# =====================================================================# ============================================================================
 def begin_request_transaction(session: Session) -> None:
     """Establish the physical outer transaction for one SQLite request."""
     if session.get_bind().dialect.name != "sqlite":
@@ -237,10 +162,7 @@ def build_engine(database_url: str) -> Engine:
 #   - File: scripts/bootstrap_operator.py -> the one-transaction guarantee.
 #   - File: backend/ums_smart_revenue/app.py -> executor/scheduler share this
 #     engine's session_factory on SQLite test apps.
-# ============================================================================
-def _enable_sqlite_transactional_savepoints(engine: Engine) -> None:
-    """Emit real BEGINs on SQLite so SAVEPOINT/RELEASE nest instead of committing."""
-
+# =====================================================================
     @event.listens_for(engine, "connect")
     def _disable_pysqlite_transaction_management(
         dbapi_connection: Any, _connection_record: Any

@@ -1,14 +1,4 @@
-# ============================================================================
-# Purpose: Session factory tenant-lane / platform-lane hooks and one-slot SQLite
-#   checkout serialization.
-# Database/ORM: SQLite QueuePool engines; optional disposable Postgres via
-#   UMS_TEST_DATABASE_URL for RLS role assertions.
-# Standards: Fail-closed lock release; no suppressions.
-# Blast Radius: Test-only.
-# Connections:
-#   - File: backend/ums_smart_revenue/db/session.py -> subject.
-# ============================================================================
-from concurrent.futures import ThreadPoolExecutor
+# =====================================================================from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from threading import Event
 

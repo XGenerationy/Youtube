@@ -21,7 +21,6 @@
 import hashlib
 import importlib.util
 import json
-import re
 from collections.abc import Iterable
 from pathlib import Path
 from types import ModuleType
@@ -277,14 +276,6 @@ _EXPECTED_CURRENT_ROLE_PERMISSIONS: dict[str, set[str]] = {
     "tv_sector_manager": {"analytics.view", "exports.analytics", "analytics.view_confidence"},
 }
 
-_ROLE_ROW = re.compile(r"^\s*\('([^']*)', '([^']*)', '([^']*)', (true|false)\),?$", re.MULTILINE)
-_PERMISSION_ROW = re.compile(
-    r"^\s*\('([^']*)', '([^']*)', (true|false), (true|false)\),?$", re.MULTILINE
-)
-_PAIR_ROW = re.compile(r"^\s*\('([^']*)', '([^']*)'\),?$", re.MULTILINE)
-
-
-
 def _parse_value_tuples(body: str) -> list[tuple[str, ...]]:
     """Split a VALUES body into top-level tuples of literal values.
 
@@ -343,7 +334,6 @@ def _literal_value(token: str) -> str:
     if len(token) >= 2 and token[0] == token[-1] == "'":
         return token[1:-1]
     return token
-
 
 
 def _migration_module(path: Path, name: str) -> ModuleType:

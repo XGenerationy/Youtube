@@ -190,7 +190,8 @@ class _FakeExecutor:
         self.audit_failure_calls.append(kwargs)
         return True
 
-    def recover_abandoned_submission_intents(self) -> int:
+    @staticmethod
+    def recover_abandoned_submission_intents() -> int:
         """Record that startup recovery ran; the fake recovers nothing."""
         return 0
 

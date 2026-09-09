@@ -610,6 +610,7 @@ def _redact_structured_value(value: object) -> object:
     except Exception:  # noqa: BLE001 — the logging path must never raise
         return f"<unredactable:{type(value).__name__}>"
 
+
 def fingerprint_log_identifier(value: str) -> str:
     """Return a process-local keyed label for a sensitive identifier."""
     return hmac.new(_LOG_FINGERPRINT_KEY, value.encode(), "sha256").hexdigest()[:12]

@@ -512,7 +512,7 @@ def _recovery_members(bundle: Path, archive: Path) -> list[Path]:
                             "320b506c406da6e90ae0654737e9377d19f10df68371520b"
                             "1279a4c7495c77a5"
                         ),
-                        "size": 22,
+                        "bytes": 22,
                     },
                     {
                         "name": "roles.sql",
@@ -520,7 +520,7 @@ def _recovery_members(bundle: Path, archive: Path) -> list[Path]:
                             "bc775661d3f85651a648df1149db3728fcdcf67b300df0c7"
                             "91cdac2f55e43681"
                         ),
-                        "size": 50,
+                        "bytes": 50,
                     },
                 ],
             }

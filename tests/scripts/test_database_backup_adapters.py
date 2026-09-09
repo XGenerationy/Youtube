@@ -568,7 +568,7 @@ def _capture_source() -> postgres.ContainerConnection:
     )
 
 
-def test_in_container_commands_clear_every_libpq_redirect_variable():
+def test_in_container_commands_clear_every_libpq_redirect_variable(tmp_path):
     """Dump, replay, and restore argv pin the connection against inheritance."""
     cleared: list[tuple[str, ...]] = []
 
@@ -601,19 +601,29 @@ def test_in_container_commands_clear_every_libpq_redirect_variable():
             cleared.append(tuple(argv))
             return ""
 
+    (tmp_path / "roles.sql").write_bytes(b"CREATE ROLE app_tenant;")
+    (tmp_path / "dump.bin").write_bytes(b"PGDMP")
     runner = _RecordingRunner()
     source = _capture_source()
     postgres.dump_snapshot(
         runner,
         source,
         snapshot_id="00000000-0000-0000-0000-000000000000",
-        destination=Path("dump.bin"),
+        destination=tmp_path / "dump.bin",
     )
     postgres.apply_sql_file(
-        runner, container="target", user="postgres", database="ums", source=Path("roles.sql")
+        runner,
+        container="target",
+        user="postgres",
+        database="ums",
+        source=tmp_path / "roles.sql",
     )
     postgres.restore_dump(
-        runner, container="target", user="postgres", database="ums", source=Path("dump.bin")
+        runner,
+        container="target",
+        user="postgres",
+        database="ums",
+        source=tmp_path / "dump.bin",
     )
     redirected = {
         "PGHOST",

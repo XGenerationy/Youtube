@@ -613,9 +613,19 @@ def _sorted_unique_records[RecordT: (TableRecord, SequenceRecord)](
     list_label: str,
     sorted_label: str,
     parse: Callable[..., RecordT],
+    allow_empty: bool = False,
 ) -> tuple[RecordT, ...]:
-    """Parse one manifest list into sorted, unique records."""
-    if not isinstance(raw, list) or not raw:
+    """Parse one manifest list into sorted, unique records.
+
+    ``allow_empty`` covers the sequence list: at the current Alembic head the
+    application schema uses UUID/text/composite keys with no ``Sequence``,
+    ``Identity``, ``SERIAL``, or ``nextval`` definition, so a legitimate
+    backup snapshot carries an empty sequence list while tables can never be
+    empty.
+    """
+    if not isinstance(raw, list):
+        raise BackupToolError(f"{list_label} must be a list", exit_code=8)
+    if not raw and not allow_empty:
         raise BackupToolError(f"{list_label} must be a non-empty list", exit_code=8)
     records = tuple(parse(row, index=index) for index, row in enumerate(raw))
     names = [record.qualified_name for record in records]
@@ -740,6 +750,7 @@ class BackupManifest:
             list_label="sequences",
             sorted_label="sequences",
             parse=SequenceRecord.from_json,
+            allow_empty=True,
         )
         authorization_digest = _require_authorization_digest(body)
         seed_floor = _require_seed_floor(body, tables)

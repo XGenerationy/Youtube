@@ -1187,13 +1187,17 @@ def _require_manifested_artifacts_present(
     if not isinstance(artifacts, list) or not artifacts:
         raise StorageContractError("database-manifest.json lists no artifacts")
     for artifact in artifacts:
+        # FIX: the strict backup contract serializes artifact lengths under
+        # the key ``bytes`` (ArtifactRecord.to_json); this gate previously
+        # demanded ``size``, which no real manifest carries, so every genuine
+        # coordinated bundle was refused at sealing.
         if (
             not isinstance(artifact, dict)
             or not isinstance(artifact.get("name"), str)
             or not isinstance(artifact.get("sha256"), str)
-            or not isinstance(artifact.get("size"), int)
-            or isinstance(artifact.get("size"), bool)
-            or artifact["size"] < 0
+            or not isinstance(artifact.get("bytes"), int)
+            or isinstance(artifact.get("bytes"), bool)
+            or artifact["bytes"] < 1
         ):
             raise StorageContractError("database-manifest.json artifact entry is malformed")
         member = run_dir / artifact["name"]
@@ -1201,7 +1205,7 @@ def _require_manifested_artifacts_present(
             raise StorageContractError(
                 f"database-manifest.json artifact is missing from the package: {artifact['name']}"
             )
-        if member.stat().st_size != artifact["size"]:
+        if member.stat().st_size != artifact["bytes"]:
             raise StorageContractError(
                 f"database-manifest.json artifact size mismatch: {artifact['name']}"
             )

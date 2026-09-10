@@ -103,8 +103,8 @@ _HISTORICAL_MIGRATION_SHA256 = "e61d0cd2bdb2cb117d085067db7d4c9cee240bde0a618e37
 # by ast comparison and the semantic digest assertions below). Repinned again
 # 2026-09-10 for the AGENTS.md module contract block (comments only — the
 # semantic digest below is unchanged and still proves data identity).
-_HISTORICAL_SNAPSHOT_GIT_BLOB = "b733b81afa07a8b8e295aa73c1936c1f4d916389"
-_HISTORICAL_SNAPSHOT_SHA256 = "1a5137baad0ca3de431813707191ae22a3d7e7f85e511b99995987d9da47df7c"
+_HISTORICAL_SNAPSHOT_GIT_BLOB = "b75ec5333ab24aeb418a6dec265f7de10692f92c"
+_HISTORICAL_SNAPSHOT_SHA256 = "f5062b1f05540324d9e8ff91787d6b7cd5f8d7ddfb379e912e01c7b6155ae23d"
 _HISTORICAL_SNAPSHOT_SEMANTIC_SHA256 = (
     "376561bbe0f37448800df279d39b161f1f0d9ce03381dfc0c578df3e69704705"
 )

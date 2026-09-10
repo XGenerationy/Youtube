@@ -1242,11 +1242,24 @@ def _enqueue_after_commit(
     on ``session.info``.
     """
     if not session.info.get(_AFTER_COMMIT_FLAG_KEY):
-        event.listen(session, "after_commit", _make_after_commit_handler(executor, reservation))
+        event.listen(
+            session,
+            "after_commit",
+            _make_after_commit_handler(
+                executor,
+                reservation,
+                dialect_name=session.get_bind().dialect.name,
+            ),
+        )
         session.info[_AFTER_COMMIT_FLAG_KEY] = True
 
 
-def _make_after_commit_handler(executor: ConnectorJobExecutor, reservation: _SlotReservation):
+def _make_after_commit_handler(
+    executor: ConnectorJobExecutor,
+    reservation: _SlotReservation,
+    *,
+    dialect_name: str,
+):
     """Return a hook that activates the reservation after the session commits.
 
     If activation fails (e.g. the ThreadPoolExecutor rejects new work
@@ -1269,18 +1282,26 @@ def _make_after_commit_handler(executor: ConnectorJobExecutor, reservation: _Slo
             # 202 has a matching failure row. The original request session
             # still holds its connection until commit() returns, and the
             # executor's audit helper opens a FRESH session on the same
-            # engine — on SQLite that engine is a one-slot QueuePool, so a
+            # engine. On SQLite that engine is a one-slot QueuePool, so a
             # synchronous audit here would wait out pool_timeout inside the
-            # request and then discard the row. Run it on a daemon thread:
-            # the request returns immediately and the audit's checkout only
-            # waits for the committing session's imminent release. The audit
-            # remains best-effort: any error is logged, never raised into the
-            # request lifecycle.
-            threading.Thread(
-                target=_audit_activation_failure,
-                args=(executor, reservation, type(exc).__name__),
-                daemon=True,
-            ).start()
+            # request and then discard the row — defer it to a thread whose
+            # checkout only waits for this session's imminent release.
+            # On PostgreSQL the pool has capacity, so the audit stays
+            # synchronous: a deferred (daemon) thread could die mid-write
+            # during the very shutdown that made activate() fail, and the
+            # accepted job would lose its failure audit anyway.
+            # The audit remains best-effort: any error is logged, never
+            # raised into the request lifecycle.
+            if dialect_name == "sqlite":
+                threading.Thread(
+                    target=_audit_activation_failure,
+                    args=(executor, reservation, type(exc).__name__),
+                    daemon=True,
+                ).start()
+            else:
+                _audit_activation_failure(
+                    executor, reservation, type(exc).__name__
+                )
 
     return _after_commit
 

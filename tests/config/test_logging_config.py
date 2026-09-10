@@ -862,13 +862,22 @@ def test_handlers_added_after_configuration_and_output_release_are_redacted() ->
     late_logger.propagate = False
     # A prior test's deferred restore-watcher may still hold the dispatch;
     # let it finish BEFORE capturing the baseline so the postcondition below
-    # stays a strict identity check.
+    # stays a strict identity check. A timeout here FAILS the test loudly:
+    # silently capturing the still-installed redacting wrapper as the baseline
+    # would both weaken the final identity assertion and hide the leaking
+    # test that owes the watcher.
     for _ in range(100):
         if getattr(logging.Logger.callHandlers, "__qualname__", "") == (
             "Logger.callHandlers"
         ):
             break
         time.sleep(0.05)
+    else:
+        raise AssertionError(
+            "a prior test's deferred restore-watcher still holds the "
+            "dispatch after 5s; fix the leaking test instead of capturing "
+            "the redacting wrapper as the baseline"
+        )
     original_dispatch = logging.Logger.callHandlers
     configuration = configure_logging(level="ERROR", stream=io.StringIO())
     try:

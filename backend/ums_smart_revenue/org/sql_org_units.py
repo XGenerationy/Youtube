@@ -1,6 +1,8 @@
 # ============================================================================
 # Purpose: SQLAlchemy write repository for ``org_units`` — the guarded
-#   insert-or-read used by operator tooling (bootstrap, demo seeding).
+#   insert-or-read used by the bootstrap CLI. (``scripts/seed_demo_month.py``
+#   still inserts its own demo skeleton directly; this module owns the
+#   operator-facing path, not every org_units write in the repo.)
 # Database/ORM: OrgUnitORM (org_units). Single-row get + savepointed insert;
 #   the self-referential composite FK (tenant_id, parent_id) -> (tenant_id, id)
 #   requires a flushed parent before a child insert.
@@ -24,8 +26,8 @@ from ums_smart_revenue.db.org_models import OrgUnitORM
 
 # ============================================================================
 # Purpose: Return the org_units row at the caller's deterministic id, creating
-#   it under a savepoint when absent — the ONLY database write path for
-#   bootstrap/seed org skeletons.
+#   it under a savepoint when absent — the bootstrap CLI's write path for the
+#   operator org skeleton (demo seeding keeps its own direct insert).
 # Database/ORM: OrgUnitORM (org_units): primary-key get, savepointed insert,
 #   re-read of the winning row when a concurrent deterministic insert wins
 #   the race (IntegrityError confined to the savepoint).

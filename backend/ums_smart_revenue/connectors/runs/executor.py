@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import weakref
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -89,6 +90,12 @@ GROUP_SYNC_JOB_MONTH = "-"
 # Worker-dispatch discriminator carried on the reservation (see _enqueue_worker).
 _JOB_KIND_PULL = "pull"
 _JOB_KIND_GROUP_SYNC = "group_sync"
+
+# Bounded grace close() gives still-pending _SlotReservation hooks to run
+# before the audit pool stops accepting submissions. A reservation that
+# survives past this window belongs to a request that died before its
+# post-commit hook fired; close() audits it itself as ExecutorShutdown.
+_PENDING_HOOK_GRACE_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -264,6 +271,22 @@ class ConnectorJobExecutor:
             self._audit_executor,
         )
 
+    def _pending_reservations(self) -> int:
+        """Count registry slots still held by a not-yet-activated reservation.
+
+        A ``_SlotReservation`` in the registry means a request committed (or is
+        about to) and its ``after_commit`` hook has not yet activated,
+        cancelled, or failed-audited the slot. close() must not stop accepting
+        audits while any remain, or a committed 202 can lose its
+        ``job_failed_before_start`` row.
+        """
+        with self._lock:
+            return sum(
+                1
+                for entry in self._registry.values()
+                if isinstance(entry, _SlotReservation)
+            )
+
     # ========================================================================
     # Purpose: GC backstop — stop the worker and audit pools if close() was
     #   never invoked so neither pool keeps interpreter threads alive.
@@ -316,6 +339,21 @@ class ConnectorJobExecutor:
         process exits instead of dying on an untracked thread.
         """
         self._executor.shutdown(wait=False, cancel_futures=True)
+        # A request can commit and still have its after_commit hook pending
+        # when shutdown begins. Its activate() will now fail and it must queue
+        # the failure audit — give those in-flight hooks a bounded window to
+        # run before the audit pool stops accepting; any reservation that
+        # outlives the grace is audited as ExecutorShutdown below instead of
+        # being dropped silently.
+        deadline = time.monotonic() + _PENDING_HOOK_GRACE_SECONDS
+        while self._pending_reservations() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if self._pending_reservations():
+            logger.error(
+                "close() grace expired with %d unactivated reservations; "
+                "auditing them as ExecutorShutdown",
+                self._pending_reservations(),
+            )
         self._audit_pending_on_shutdown()
         # Flip the accepting flag under the lock BEFORE shutdown() so a
         # queue_failed_start_audit call that already entered submits into a
@@ -583,8 +621,15 @@ class ConnectorJobExecutor:
         future that is ``cancelled()`` was queued but never started; it will
         never run and therefore never writes its own lifecycle audit. A
         running or completed future is left alone -- it (or its worker) owns
-        the audit trail. Any ``_SlotReservation`` that was never activated is
-        not an accepted, committed job and is dropped silently.
+        the audit trail.
+
+        A ``_SlotReservation`` still live when this runs means its request
+        committed but the post-commit hook never completed (the grace window
+        in ``close()`` expired or the request died): the client may hold a
+        202, so the reservation is audited ``ExecutorShutdown`` rather than
+        dropped. If its hook does fire afterwards it fails activation and
+        queues the same audit — at worst a duplicate honest failure row,
+        which is preferable to an accepted job with no lifecycle record.
 
         The registry is cleared because no new work can be accepted after
         shutdown; running futures will deregister harmlessly when they finish.
@@ -595,6 +640,9 @@ class ConnectorJobExecutor:
 
         cancelled: list[tuple[_JobKey, ConnectorJobActor]] = []
         for job_key, entry in entries:
+            if isinstance(entry, _SlotReservation):
+                cancelled.append((job_key, entry.actor_identity))
+                continue
             if not isinstance(entry, _ActiveJob):
                 continue
             if not entry.future.cancelled():

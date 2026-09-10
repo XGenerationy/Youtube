@@ -309,6 +309,10 @@ def test_submit_if_absent_returns_none_for_duplicate(tmp_path) -> None:
             )
             is True
         )
+        # Mirror the request lifecycle: a live reservation must be activated
+        # or cancelled before close(), which now treats a dangling slot as an
+        # in-flight post-commit hook and waits for it.
+        executor.cancel_reservation(first)
     finally:
         executor.close()
 

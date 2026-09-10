@@ -816,8 +816,11 @@ def test_migration_downgrade_refuses_while_beta_assignment_is_live() -> None:
 
 
 def test_migration_downgrade_ignores_a_revoked_beta_assignment() -> None:
-    """Only ACTIVE rows strand a rollback: a revoked assignment cannot be parsed
-    by the principal loader, so it does not block the downgrade."""
+    """Only ACTIVE rows strand a rollback.
+
+    A revoked assignment cannot be parsed by the principal loader, so it does
+    not block the downgrade.
+    """
     module = _historical_migration_module()
     engine = _security_engine()
 

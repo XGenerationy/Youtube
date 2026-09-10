@@ -699,7 +699,6 @@ def test_import_accepts_gateway_subject_actor_id(tmp_path):
     # used to reject these with 422; per the shared actor_identity_uuid
     # helper the subject is now mapped to a deterministic uuid5 and the
     # write succeeds with that value persisted to imported_by.
-    """Import accepts gateway subject actor id."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))

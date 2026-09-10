@@ -64,6 +64,7 @@ from ums_smart_revenue.config.logging_config import (
     LOG_FORMAT,
     THIRD_PARTY_LOG_LEVEL,
     UMS_LOG_HANDLER_NAME,
+    LoggingConfiguration,
     build_log_formatter,
     configure_logging,
     installed_log_handler,
@@ -1871,11 +1872,13 @@ def test_redaction_preserves_uvicorn_access_formatter_contract() -> None:
     handler = logging.StreamHandler(io.StringIO())
     handler.setFormatter(AccessFormatter("%(message)s"))
     root.addHandler(handler)
-    configuration = configure_logging(level="INFO", stream=io.StringIO())
+    configuration: LoggingConfiguration | None = None
     try:
+        configuration = configure_logging(level="INFO", stream=io.StringIO())
         logging.getLogger("uvicorn.access").handle(record)
     finally:
-        restore_logging(configuration)
+        if configuration is not None:
+            restore_logging(configuration)
         root.removeHandler(handler)
         handler.close()
     rendered = handler.stream.getvalue() if hasattr(handler, "stream") else ""

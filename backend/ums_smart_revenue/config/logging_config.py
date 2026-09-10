@@ -621,6 +621,29 @@ def _is_first_party_logger(name: str) -> bool:
     return name == FIRST_PARTY_LOGGER_NAME or name.startswith(FIRST_PARTY_LOGGER_NAME + ".")
 
 
+
+def _redact_record_arguments(record: logging.LogRecord, *, rendered: str) -> None:
+    """Redact one record's message/arguments without breaking Uvicorn's contract.
+
+    FIX: Uvicorn's AccessFormatter unpacks exactly five positional arguments
+    (client address, method, path, HTTP version, status) from
+    ``record.args``; clearing the tuple — the correct move for ordinary
+    %-formatted records, where the pre-rendered message already carries the
+    content — instead made every access record raise inside the formatter and
+    vanish. Access records keep their tuple shape with each argument
+    sanitized in place; the format string itself carries no secrets.
+    """
+    if record.name == "uvicorn.access" and isinstance(record.args, tuple):
+        record.msg = _redact_log_text(record.msg)
+        record.args = tuple(
+            _redact_log_text(argument) if isinstance(argument, str) else argument
+            for argument in record.args
+        )
+    else:
+        record.msg = _redact_log_text(rendered)
+        record.args = ()
+
+
 class _RedactionFilter(logging.Filter):
     """Sanitize the shared record before every configured handler formats it."""
 
@@ -649,23 +672,7 @@ class _RedactionFilter(logging.Filter):
             record.exc_text = None
         elif record.exc_text:
             record.exc_text = _redact_log_text(record.exc_text)
-        if record.name == "uvicorn.access" and isinstance(record.args, tuple):
-            # FIX: Uvicorn's AccessFormatter unpacks exactly five positional
-            # arguments (client address, method, path, HTTP version, status)
-            # from record.args; clearing the tuple — the correct move for
-            # ordinary %-formatted records, where the pre-rendered message
-            # already carries the content — instead made every access record
-            # raise inside the formatter and vanish. Sanitize each argument
-            # in place and keep the tuple's shape; the format string itself
-            # carries no secrets.
-            record.msg = _redact_log_text(record.msg)
-            record.args = tuple(
-                _redact_log_text(argument) if isinstance(argument, str) else argument
-                for argument in record.args
-            )
-        else:
-            record.msg = _redact_log_text(rendered)
-            record.args = ()
+        _redact_record_arguments(record, rendered=rendered)
         if record.stack_info:
             record.stack_info = _redact_log_text(record.stack_info)
         for key, nested in tuple(record.__dict__.items()):

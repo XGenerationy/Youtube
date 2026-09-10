@@ -1850,8 +1850,6 @@ def test_leveled_third_party_logger_is_filtered_at_the_handler():
 
 def test_redaction_preserves_uvicorn_access_formatter_contract() -> None:
     """uvicorn.access records keep their five-argument tuple for AccessFormatter."""
-    import logging
-
     from uvicorn.logging import AccessFormatter
 
     record = logging.LogRecord(
@@ -1873,8 +1871,8 @@ def test_redaction_preserves_uvicorn_access_formatter_contract() -> None:
     handler = logging.StreamHandler(io.StringIO())
     handler.setFormatter(AccessFormatter("%(message)s"))
     root.addHandler(handler)
+    configuration = configure_logging(level="INFO", stream=io.StringIO())
     try:
-        configuration = configure_logging(level="INFO", stream=io.StringIO())
         logging.getLogger("uvicorn.access").handle(record)
     finally:
         restore_logging(configuration)

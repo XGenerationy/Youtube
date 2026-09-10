@@ -120,6 +120,15 @@ _ROLE_PERMISSIONS = sa.table(
     sa.column("role_key", sa.Text()),
     sa.column("permission_key", sa.Text()),
 )
+_USER_ROLE_ASSIGNMENTS = sa.table(
+    "user_role_assignments",
+    sa.column("role_key", sa.Text()),
+    sa.column("active", sa.Boolean()),
+)
+
+
+class LiveBetaOperatorAssignmentError(RuntimeError):
+    """Refuse a downgrade that would orphan a live ``beta_operator`` assignment."""
 
 
 def role_seed_rows() -> list[dict[str, object]]:
@@ -169,9 +178,60 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Leave the authorization catalog in place; this seed is not reversed."""
     # Non-destructive by design: upgrade is insert-missing + metadata refresh, so
-    # provenance of canonical pairs cannot be recovered. Touch the bind so this
-    # path is an intentional no-op statement rather than an empty body.
-    _ = op.get_bind()
+    # provenance of canonical pairs cannot be recovered. The catalog stays, but
+    # a LIVE beta_operator assignment is a different contract: the parent
+    # revision's RoleKey cannot parse it, so an application rollback would make
+    # the principal loader raise PrincipalDataValidationError and deny those
+    # operators access. Refuse first; the operator revokes or migrates the
+    # assignment, then re-runs.
+    _refuse_downgrade_with_live_beta_operator_assignments(op.get_bind())
+
+
+# ============================================================================
+# Purpose: Fail a ``20260825_0001`` downgrade while an ACTIVE ``beta_operator``
+#   row remains in ``user_role_assignments``; the principal loader only parses
+#   active assignments, so revoked rows cannot break a rolled-back binary.
+# Database/ORM: ``user_role_assignments`` (read-only COUNT). The table is
+#   tenant-scoped under FORCE RLS, so on PostgreSQL the count runs under
+#   ``SET LOCAL row_security = off``: for a NOBYPASSRLS owner with no tenant
+#   context that turns a silently-empty read into an error, which is then also
+#   refused — a blind pass is treated the same as a live assignment.
+# Standards: Fail closed; typed RuntimeError sibling of
+#   IrreversibleAuthorizationRepairError in 20260825_0002.
+# Blast Radius: Downgrade path only; no catalog, finance, or audit rows change.
+# Connections:
+#   - File: backend/ums_smart_revenue/auth/principals.py -> active-only loader.
+#   - File: tests/db/test_security_role_permission_seed_migration.py -> guard.
+# ============================================================================
+def _refuse_downgrade_with_live_beta_operator_assignments(
+    bind: sa.engine.Connection,
+) -> None:
+    """Raise while an active ``beta_operator`` assignment exists or is unreadable."""
+    if bind.dialect.name == "postgresql":
+        bind.execute(sa.text("SET LOCAL row_security = off"))
+    try:
+        live = bind.execute(
+            sa.select(sa.func.count())
+            .select_from(_USER_ROLE_ASSIGNMENTS)
+            .where(
+                _USER_ROLE_ASSIGNMENTS.c.role_key == "beta_operator",
+                _USER_ROLE_ASSIGNMENTS.c.active.is_(True),
+            )
+        ).scalar_one()
+    except sa.exc.SQLAlchemyError as exc:
+        raise LiveBetaOperatorAssignmentError(
+            "downgrade could not verify active beta_operator assignments "
+            "(a row-security-bounded login cannot read across tenants); "
+            "re-run as a superuser/BYPASSRLS role after revoking or migrating "
+            "beta_operator assignments"
+        ) from exc
+    if live:
+        raise LiveBetaOperatorAssignmentError(
+            f"downgrade would strand {live} active beta_operator assignment(s): "
+            "the parent revision's RoleKey cannot parse them and the principal "
+            "loader would deny those operators access; revoke or migrate the "
+            "assignments, then re-run the downgrade"
+        )
 
 
 # ============================================================================

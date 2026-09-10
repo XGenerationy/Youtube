@@ -88,8 +88,12 @@ REPAIR_MIGRATION_PATH = (
 HISTORICAL_SNAPSHOT_PATH = PROJECT_ROOT / "backend/ums_smart_revenue/db/frozen_security_catalog.py"
 SEED_SQL_PATH = PROJECT_ROOT / "backend/ums_smart_revenue/db/security_seed.sql"
 
-_HISTORICAL_MIGRATION_GIT_BLOB = "9df02500cdc0508da211ad51e5d3e0306a67771b"
-_HISTORICAL_MIGRATION_SHA256 = "01a93d377fa9b5c296daffbc0cc600a6949021fa53bddeae546ce7cb6b7766c5"
+# Repinned 2026-09-10: downgrade() now refuses while an ACTIVE beta_operator
+# assignment exists (PR #223 review: a stranded assignment makes a rolled-back
+# binary raise PrincipalDataValidationError for that operator). Upgrade logic
+# and the frozen catalog contract are unchanged.
+_HISTORICAL_MIGRATION_GIT_BLOB = "c8b398ffb3d8c1cf0147bef856cb15c983aa7237"
+_HISTORICAL_MIGRATION_SHA256 = "19714d9f65338d473df433847a0269fc92853834118234ae681d411c10e48ff9"
 # Repinned 2026-09-03: whitespace-only reformat of the frozen literal rows
 # (one key per line, <=100 cols) to clear analyzer line-length findings
 # pre-merge; the parsed catalog data is byte-for-data identical (verified
@@ -749,6 +753,93 @@ def test_migration_downgrade_keeps_rows_a_live_assignment_still_needs() -> None:
         assert "finance.view_revenue" in _stored_permissions(connection)
         assert _stored_pairs(connection) == pairs_before
         assert ("finance_admin", "finance.view_revenue") in _stored_pairs(connection)
+
+
+def _seed_beta_assignment(engine: Engine, *, active: bool) -> None:
+    """Persist one beta_operator assignment row for downgrade-guard tests."""
+    from datetime import UTC, datetime
+
+    user_id = uuid4()
+    scope_id = uuid4()
+    with Session(engine) as session:
+        session.add(UserORM(id=user_id, email="beta@example.com", display_name="Beta"))
+        session.add(AccessScopeORM(id=scope_id, scope_type="global", scope_id=None, label="Global"))
+        session.add(
+            UserRoleAssignmentORM(
+                id=uuid4(),
+                user_id=user_id,
+                role_key="beta_operator",
+                scope_id=scope_id,
+                active=active,
+                # ck_user_role_assignments_revocation: an inactive row must
+                # carry its revocation fields.
+                revoked_by=None if active else user_id,
+                revoked_at=None if active else datetime.now(UTC),
+            )
+        )
+        session.commit()
+
+
+def test_migration_downgrade_refuses_while_beta_assignment_is_live() -> None:
+    """A live beta_operator assignment blocks the downgrade; nothing is lost."""
+    module = _historical_migration_module()
+    engine = _security_engine()
+
+    with engine.begin() as connection:
+        _bind_operations(module, connection)
+        module.upgrade()
+        catalog_before = (
+            _stored_roles(connection),
+            _stored_permissions(connection),
+            _stored_pairs(connection),
+        )
+    _seed_beta_assignment(engine, active=True)
+
+    with engine.begin() as connection:
+        _bind_operations(module, connection)
+        with pytest.raises(
+            module.LiveBetaOperatorAssignmentError,
+            match="active beta_operator assignment",
+        ):
+            module.downgrade()
+
+        # The refusal leaves the catalog and the assignment itself untouched.
+        assert (
+            _stored_roles(connection),
+            _stored_permissions(connection),
+            _stored_pairs(connection),
+        ) == catalog_before
+        remaining = connection.scalar(
+            text("SELECT count(*) FROM user_role_assignments WHERE role_key = 'beta_operator'")
+        )
+        assert remaining == 1
+
+
+def test_migration_downgrade_ignores_a_revoked_beta_assignment() -> None:
+    """Only ACTIVE rows strand a rollback: a revoked assignment cannot be parsed
+    by the principal loader, so it does not block the downgrade."""
+    module = _historical_migration_module()
+    engine = _security_engine()
+
+    with engine.begin() as connection:
+        _bind_operations(module, connection)
+        module.upgrade()
+        catalog_before = (
+            _stored_roles(connection),
+            _stored_permissions(connection),
+            _stored_pairs(connection),
+        )
+    _seed_beta_assignment(engine, active=False)
+
+    with engine.begin() as connection:
+        _bind_operations(module, connection)
+        module.downgrade()
+
+        assert (
+            _stored_roles(connection),
+            _stored_permissions(connection),
+            _stored_pairs(connection),
+        ) == catalog_before
 
 
 def test_repair_downgrade_is_unconditionally_irreversible() -> None:

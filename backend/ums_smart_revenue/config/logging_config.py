@@ -621,7 +621,6 @@ def _is_first_party_logger(name: str) -> bool:
     return name == FIRST_PARTY_LOGGER_NAME or name.startswith(FIRST_PARTY_LOGGER_NAME + ".")
 
 
-
 def _redact_record_arguments(record: logging.LogRecord, *, rendered: str) -> None:
     """Redact one record's message/arguments without breaking Uvicorn's contract.
 

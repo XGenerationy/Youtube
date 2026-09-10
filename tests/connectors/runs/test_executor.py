@@ -1,3 +1,15 @@
+# ============================================================================
+# Purpose: Unit tests for the in-process ConnectorJobExecutor — worker session
+#   isolation, registry dedup, reserve/activate/cancel, shutdown audits, and
+#   the tracked audit-pool drain semantics.
+# Database/ORM: Disposable file-backed SQLite via _factory; asserts audit_logs
+#   rows and tenant-context behavior.
+# Standards: Test-only; stubs run_one/_audit_failed_before_start where needed
+#   and asserts typed failure audits instead of exception escapes.
+# Blast Radius: None — test module.
+# Connections:
+#   - File: backend/ums_smart_revenue/connectors/runs/executor.py -> SUT.
+# ============================================================================
 """Unit tests for the in-process ConnectorJobExecutor worker + registry."""
 
 from __future__ import annotations
@@ -32,6 +44,7 @@ ACTOR = ConnectorJobActor(user_id=str(uuid4()), email="ops@example.com")
 
 
 def _factory(tmp_path) -> sessionmaker:
+    """Create a file-backed sessionmaker with the executor's schema seeded."""
     url = f"sqlite+pysqlite:///{(tmp_path / 'exec.db').as_posix()}"
     engine = create_engine(url)
     OrgBase.metadata.create_all(engine)
@@ -67,6 +80,7 @@ def _factory(tmp_path) -> sessionmaker:
 
 
 def _outcome() -> ConnectorRunOutcome:
+    """Return the minimal ConnectorRunOutcome a stubbed run_one can return."""
     return ConnectorRunOutcome(run=None, counts={}, per_report_failures=[])
 
 
@@ -76,6 +90,7 @@ def test_run_job_uses_own_session_and_sets_tenant_context(tmp_path) -> None:
     seen: dict[str, object] = {}
 
     def _fake_run_one(session, **kwargs):
+        """Record the worker's session + tenant context for assertions."""
         tenant = get_current_tenant()
         seen["tenant_id"] = None if tenant is None else tenant.id
         seen["session_is_factory"] = isinstance(session, Session)
@@ -144,6 +159,7 @@ def test_run_job_bucket_a_failure_writes_audit_and_does_not_propagate(
     key = (TENANT, "youtube_reporting", "acct-1", "2026-03")
 
     def _boom(session, **kwargs):
+        """Simulate a credential-refresh failure inside the worker."""
         raise OAuthRefreshError(inner=RuntimeError("revoked"))
 
     try:
@@ -189,6 +205,7 @@ def test_run_job_unexpected_exception_swallowed_and_registry_cleared(
     key = (TENANT, "youtube_reporting", "acct-1", "2026-03")
 
     def _boom(session, **kwargs):
+        """Simulate a projection failure after the run row was audited."""
         raise RuntimeError("projection failed; run already FAILED+audited")
 
     try:
@@ -292,6 +309,10 @@ def test_submit_if_absent_returns_none_for_duplicate(tmp_path) -> None:
             )
             is True
         )
+        # Mirror the request lifecycle: a live reservation must be activated
+        # or cancelled before close(), which now treats a dangling slot as an
+        # in-flight post-commit hook and waits for it.
+        executor.cancel_reservation(first)
     finally:
         executor.close()
 
@@ -492,7 +513,8 @@ def test_run_job_dry_run_no_failures_writes_empty_per_report_failures(
     tmp_path,
 ) -> None:
     """A dry-run with no per-report failures still audits the completed row,
-    with an empty per_report_failures list."""
+    with an empty per_report_failures list.
+    """
     factory = _factory(tmp_path)
     executor = ConnectorJobExecutor(session_factory=factory, max_workers=1, stale_running_hours=6)
     key = (TENANT, "youtube_reporting", "acct-1", "2026-03")
@@ -546,6 +568,7 @@ def test_run_job_service_principal_failure_writes_bucket_a_audit(
     )
 
     def _boom(session, **kwargs):
+        """Simulate the service-actor gate raising before run_one starts."""
         raise ConnectorServicePrincipalUnavailableError(
             env_var="UMS_GOOGLE_CONNECTOR_SERVICE_ACTOR_ID"
         )
@@ -641,6 +664,7 @@ def test_close_audits_queued_jobs_cancelled_by_shutdown(tmp_path) -> None:
     started = threading.Event()
 
     def _slow_run_one(session, **kwargs):
+        """Hold the single worker slot so the second job stays queued."""
         started.set()
         time.sleep(0.5)
         return _outcome()
@@ -696,3 +720,208 @@ def test_close_audits_queued_jobs_cancelled_by_shutdown(tmp_path) -> None:
     assert not any(a.details.get("report_month") == "2026-03" for a in shutdown_audits)
     # The registry is cleared after shutdown.
     assert executor._registry == {}
+
+
+def test_close_drains_activation_failure_audits_queued_mid_teardown(tmp_path) -> None:
+    """A route-queued audit overlapping close() is accepted and drained.
+
+    ``queue_failed_start_audit`` submits under ``_audit_lock`` while
+    ``close()`` flips ``_audit_accepting`` under the same lock before calling
+    ``shutdown(wait=True)``: a submission that entered first always lands in a
+    live pool and is drained; one that arrives later is rejected cleanly
+    (logged, never raised). Both interleavings are pinned deterministically.
+    """
+    import threading
+
+    factory = _factory(tmp_path)
+    executor = ConnectorJobExecutor(session_factory=factory, max_workers=1, stale_running_hours=6)
+    started = threading.Event()
+    release = threading.Event()
+    completed: list[str] = []
+
+    def _slow_audit(**kwargs):
+        """Block mid-write so close() provably overlaps the queued audit."""
+        started.set()
+        release.wait(timeout=5)
+        completed.append(kwargs["error_class"])
+
+    executor._audit_failed_before_start = _slow_audit  # stub out the DB write
+    try:
+        executor.queue_failed_start_audit(
+            tenant_id=TENANT,
+            connector_key="youtube_reporting",
+            account_id="acct-1",
+            report_month="2026-03",
+            error_class="RuntimeError",
+            actor_identity=ACTOR,
+        )
+        assert started.wait(timeout=5)
+        closer = threading.Thread(target=executor.close)
+        closer.start()
+        release.set()
+        closer.join(timeout=10)
+        assert not closer.is_alive(), "close() must drain the in-flight audit"
+        assert completed == ["RuntimeError"]
+
+        # A submission arriving after close() stops accepting is skipped
+        # cleanly — logged, never raised into the request lifecycle (on
+        # SQLite the post-close fallback is suppressed because the request
+        # session still holds the engine's only pooled connection).
+        executor.queue_failed_start_audit(
+            tenant_id=TENANT,
+            connector_key="youtube_reporting",
+            account_id="acct-1",
+            report_month="2026-04",
+            error_class="RuntimeError",
+            actor_identity=ACTOR,
+        )
+        assert completed == ["RuntimeError"]
+    finally:
+        release.set()
+        executor.close()
+
+
+def test_close_audits_committed_leftover_reservation_as_shutdown(tmp_path, monkeypatch) -> None:
+    """A marked-committed reservation whose hook never ran is audited.
+
+    The after_commit hook calls ``begin_post_commit`` before ``activate`` —
+    the hook can only run post-commit, so a committed-marked reservation
+    still in the registry at close() is an accepted job whose hook died
+    mid-flight. close() must emit ``job_failed_before_start``
+    (ExecutorShutdown) so the 202 keeps its lifecycle edge.
+    """
+    from ums_smart_revenue.connectors.runs import executor as executor_module
+
+    monkeypatch.setattr(executor_module, "_PENDING_HOOK_GRACE_SECONDS", 0.05)
+    factory = _factory(tmp_path)
+    executor = ConnectorJobExecutor(session_factory=factory, max_workers=1, stale_running_hours=6)
+    reservation = executor.submit_if_absent(
+        tenant_id=TENANT,
+        connector_key="youtube_reporting",
+        account_id="acct-1",
+        report_month="2026-03",
+        dry_run=False,
+        triggered_by_user_id=None,
+        actor_identity=ACTOR,
+    )
+    assert reservation is not None
+    # The hook entered (committed) but died before activate/end — the
+    # reservation is a leftover close() must audit, not drop.
+    executor.begin_post_commit(reservation)
+    executor.close()
+
+    with factory() as session:
+        audits = session.scalars(select(AuditLogORM)).all()
+    shutdown = [
+        a
+        for a in audits
+        if a.details.get("action") == "job_failed_before_start"
+        and a.details.get("error_class") == "ExecutorShutdown"
+    ]
+    assert len(shutdown) == 1
+    assert shutdown[0].details["report_month"] == "2026-03"
+
+    # A late queue call for the same job is deduplicated — still one row.
+    executor.queue_failed_start_audit(
+        tenant_id=TENANT,
+        connector_key="youtube_reporting",
+        account_id="acct-1",
+        report_month="2026-03",
+        error_class="RuntimeError",
+        actor_identity=ACTOR,
+    )
+    with factory() as session:
+        audits = session.scalars(select(AuditLogORM)).all()
+    assert len(audits) == 1
+
+
+def test_close_drops_uncommitted_leftover_reservation_without_audit(tmp_path, monkeypatch) -> None:
+    """An unmarked leftover reservation is dropped without a failure row.
+
+    A reservation exists BEFORE the request transaction commits; one still
+    pending after grace with no committed mark belongs to a still-open or
+    rolled-back request — auditing it would invent a failure for a job that
+    was never accepted.
+    """
+    from ums_smart_revenue.connectors.runs import executor as executor_module
+
+    monkeypatch.setattr(executor_module, "_PENDING_HOOK_GRACE_SECONDS", 0.05)
+    factory = _factory(tmp_path)
+    executor = ConnectorJobExecutor(session_factory=factory, max_workers=1, stale_running_hours=6)
+    reservation = executor.submit_if_absent(
+        tenant_id=TENANT,
+        connector_key="youtube_reporting",
+        account_id="acct-1",
+        report_month="2026-03",
+        dry_run=False,
+        triggered_by_user_id=None,
+        actor_identity=ACTOR,
+    )
+    assert reservation is not None
+    executor.close()
+
+    with factory() as session:
+        audits = session.scalars(select(AuditLogORM)).all()
+    assert not any(
+        a.details.get("action") == "job_failed_before_start" for a in audits
+    )
+
+
+def test_close_keeps_audit_gate_open_for_hook_past_reservation_removal(tmp_path) -> None:
+    """close() holds the audit pool until a hook's failure audit is queued.
+
+    Regression for the interleaving where activate() has already popped the
+    _SlotReservation from the registry before the hook calls
+    queue_failed_start_audit: the registry alone shows zero pending slots,
+    so only the begin/end_post_commit bracket keeps close() from disabling
+    audit submission mid-hook.
+    """
+    import threading
+
+    factory = _factory(tmp_path)
+    executor = ConnectorJobExecutor(session_factory=factory, max_workers=1, stale_running_hours=6)
+    reservation = executor.submit_if_absent(
+        tenant_id=TENANT,
+        connector_key="youtube_reporting",
+        account_id="acct-1",
+        report_month="2026-03",
+        dry_run=False,
+        triggered_by_user_id=None,
+        actor_identity=ACTOR,
+    )
+    assert reservation is not None
+
+    # Start close() so it enters the grace window with the slot pending,
+    # then run the hook inline: activate raises against the stopped pool,
+    # pops the slot, and the audit is queued while close() is still waiting.
+    closer = threading.Thread(target=executor.close)
+    closer.start()
+
+    executor.begin_post_commit(reservation)
+    try:
+        executor.activate(reservation)
+        raise AssertionError("activate must fail against a stopped pool")
+    except RuntimeError as exc:
+        executor.cancel_reservation(reservation)
+        executor.queue_failed_start_audit(
+            tenant_id=reservation.tenant_id,
+            connector_key=reservation.connector_key,
+            account_id=reservation.account_id,
+            report_month=reservation.report_month,
+            error_class=type(exc).__name__,
+            actor_identity=reservation.actor_identity,
+        )
+    finally:
+        executor.end_post_commit(reservation)
+
+    closer.join(timeout=10)
+    assert not closer.is_alive(), "close() must wait for the in-flight hook"
+
+    with factory() as session:
+        audits = session.scalars(select(AuditLogORM)).all()
+    failure_rows = [
+        a for a in audits if a.details.get("action") == "job_failed_before_start"
+    ]
+    assert len(failure_rows) == 1
+    assert failure_rows[0].details["error_class"] == "RuntimeError"
+    assert failure_rows[0].details["report_month"] == "2026-03"

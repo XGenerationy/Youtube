@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from ums_smart_revenue.app import create_app
 from ums_smart_revenue.auth.permissions import PERMISSION_DEFINITIONS
 from ums_smart_revenue.auth.roles import ROLE_DEFINITIONS
+from ums_smart_revenue.db.org_models import OrgBase
 from ums_smart_revenue.db.security_models import (
     AuditLogORM,
     PermissionORM,
@@ -41,6 +42,8 @@ def seed_database(database_url: str) -> None:
     """Seed one disposable database for the scenario under test."""
     engine = create_engine(database_url)
     SecurityBase.metadata.create_all(engine)
+    # OrgAccessIndex loader dependency reads org_units/youtube_channels.
+    OrgBase.metadata.create_all(engine)
     with Session(engine) as session:
         session.add_all(
             [
@@ -353,3 +356,30 @@ def test_duplicate_active_permission_grant_is_rejected(tmp_path):
     assert first.status_code == 201
     assert second.status_code == 409
     assert second.json()["detail"] == "Active permission grant already exists"
+
+
+def test_scoped_role_check_uses_the_request_org_index() -> None:
+    """A scoped authority assignment contains only targets inside its scope."""
+    import ums_smart_revenue.api.users as users_api
+    from ums_smart_revenue.auth.models import RoleAssignment, UserPrincipal
+    from ums_smart_revenue.auth.roles import RoleKey
+    from ums_smart_revenue.auth.scopes import AccessScope, OrgAccessIndex
+
+    index = OrgAccessIndex(company_sector={"company-a": "sector-1"})
+    admin = UserPrincipal(
+        user_id=str(ADMIN_ID),
+        email="admin@example.com",
+        role_assignments=(
+            RoleAssignment(role=RoleKey.FINANCE_ADMIN, scope=AccessScope.sector("sector-1")),
+        ),
+    )
+
+    assert users_api._has_scoped_role(
+        admin, RoleKey.FINANCE_ADMIN, AccessScope.company("company-a"), index
+    )
+    assert not users_api._has_scoped_role(
+        admin, RoleKey.FINANCE_ADMIN, AccessScope.company("company-b"), index
+    )
+    assert not users_api._has_scoped_role(
+        admin, RoleKey.FINANCE_ADMIN, AccessScope.sector("sector-2"), index
+    )

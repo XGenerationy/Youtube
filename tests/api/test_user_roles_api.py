@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ums_smart_revenue.app import create_app
 from ums_smart_revenue.auth.roles import ROLE_DEFINITIONS
+from ums_smart_revenue.db.org_models import OrgBase
 from ums_smart_revenue.db.security_models import (
     AuditLogORM,
     RoleORM,
@@ -40,6 +41,8 @@ def seed_database(database_url: str, *, target_is_service_account: bool = False)
     """Seed one disposable database for the scenario under test."""
     engine = create_engine(database_url)
     SecurityBase.metadata.create_all(engine)
+    # OrgAccessIndex loader dependency reads org_units/youtube_channels.
+    OrgBase.metadata.create_all(engine)
     with Session(engine) as session:
         session.add_all(
             [

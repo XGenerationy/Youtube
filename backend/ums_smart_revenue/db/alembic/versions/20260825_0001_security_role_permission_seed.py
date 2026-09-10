@@ -1,3 +1,20 @@
+# ============================================================================
+# Purpose: Seed the roles / permissions / role-permission authorization
+#   catalog so fresh databases can resolve role/permission keys at FK and
+#   principal-loader time (H1 / P0.7 in the deployment-readiness docs).
+# Database/ORM: roles, permissions, role_permission_assignments — platform-wide
+#   catalog tables outside tenant RLS; the downgrade guard additionally locks
+#   and counts user_role_assignments on PostgreSQL.
+# Standards: Idempotent insert-missing + metadata refresh sourced from the
+#   frozen snapshot, never the mutable live registries; fail-closed downgrade
+#   refusal via LiveBetaOperatorAssignmentError.
+# Blast Radius: Authorization catalog rows and the role-assignment downgrade
+#   guard only; no finance, audit, or tenant rows change.
+# Connections:
+#   - File: backend/ums_smart_revenue/db/frozen_security_catalog.py -> rows.
+#   - File: backend/ums_smart_revenue/db/security_seed.sql -> raw SQL twin.
+#   - File: tests/db/test_security_role_permission_seed_migration.py -> pins.
+# ============================================================================
 """Seed the roles / permissions / role-permission catalog.
 
 Revision ID: 20260825_0001
@@ -146,6 +163,18 @@ def role_permission_seed_rows() -> list[dict[str, object]]:
     return [dict(row) for row in FROZEN_ROLE_PERMISSION_ROWS]
 
 
+# ============================================================================
+# Purpose: Idempotently seed the authorization catalog — insert missing
+#   role/permission/assignment rows and refresh existing metadata so a
+#   previously raw-seeded database converges to the frozen snapshot.
+# Database/ORM: roles, permissions, role_permission_assignments — the three
+#   platform-wide catalog tables; dialect-portable SELECT/INSERT/UPDATE.
+# Standards: Idempotent (safe re-run); rows come only from the frozen
+#   snapshot module, never the mutable live registries.
+# Blast Radius: Authorization catalog only; no user, tenant, or finance writes.
+# Connections:
+#   - File: backend/ums_smart_revenue/db/frozen_security_catalog.py -> rows.
+# ============================================================================
 def upgrade() -> None:
     """Seed (or refresh) the role, permission, and role-permission catalogs."""
     bind = op.get_bind()
@@ -175,6 +204,22 @@ def upgrade() -> None:
 #   - File: Docs/20_DEPLOYMENT_READINESS_AUDIT.md -> H1 / P0.7.
 #   - File: tests/db/test_security_role_permission_seed_migration.py -> guards.
 # ============================================================================
+# ============================================================================
+# Purpose: Non-destructive downgrade for the seed revision — catalog rows stay
+#   because upgrade provenance cannot be recovered, but an ACTIVE
+#   beta_operator assignment must refuse the rollback: the parent revision's
+#   RoleKey cannot parse it and the principal loader would deny those
+#   operators access.
+# Database/ORM: user_role_assignments — SHARE ROW EXCLUSIVE lock plus an
+#   ACTIVE-count read on PostgreSQL (serializes against concurrent writers);
+#   a plain count on other dialects.
+# Standards: Fail closed — LiveBetaOperatorAssignmentError on live rows or an
+#   unverifiable row-security read; no catalog rows are removed.
+# Blast Radius: Downgrade path only; briefly holds writes to
+#   user_role_assignments until the migration transaction ends.
+# Connections:
+#   - File: backend/ums_smart_revenue/auth/principals.py -> active-only loader.
+# ============================================================================
 def downgrade() -> None:
     """Leave the authorization catalog in place; this seed is not reversed.
 
@@ -199,14 +244,21 @@ def downgrade() -> None:
 # Purpose: Fail a ``20260825_0001`` downgrade while an ACTIVE ``beta_operator``
 #   row remains in ``user_role_assignments``; the principal loader only parses
 #   active assignments, so revoked rows cannot break a rolled-back binary.
-# Database/ORM: ``user_role_assignments`` (read-only COUNT). The table is
-#   tenant-scoped under FORCE RLS, so on PostgreSQL the count runs under
+# Database/ORM: ``user_role_assignments`` (LOCK + read-only COUNT). The table
+#   is tenant-scoped under FORCE RLS, so on PostgreSQL the check runs under
 #   ``SET LOCAL row_security = off``: for a NOBYPASSRLS owner with no tenant
 #   context that turns a silently-empty read into an error, which is then also
 #   refused — a blind pass is treated the same as a live assignment.
+#   ``LOCK TABLE ... SHARE ROW EXCLUSIVE`` conflicts with the ROW EXCLUSIVE
+#   lock every INSERT/UPDATE/DELETE takes, so no concurrent writer can commit
+#   a fresh active assignment between this count and the end of the migration
+#   transaction — a snapshot-only check would otherwise let a role assignment
+#   slip in behind the downgrade.
 # Standards: Fail closed; typed RuntimeError sibling of
 #   IrreversibleAuthorizationRepairError in 20260825_0002.
 # Blast Radius: Downgrade path only; no catalog, finance, or audit rows change.
+#   The lock brief holds writes to ``user_role_assignments`` until the
+#   migration transaction ends.
 # Connections:
 #   - File: backend/ums_smart_revenue/auth/principals.py -> active-only loader.
 #   - File: tests/db/test_security_role_permission_seed_migration.py -> guard.
@@ -215,9 +267,14 @@ def _refuse_downgrade_with_live_beta_operator_assignments(
     bind: sa.engine.Connection,
 ) -> None:
     """Raise while an active ``beta_operator`` assignment exists or is unreadable."""
-    if bind.dialect.name == "postgresql":
-        bind.execute(sa.text("SET LOCAL row_security = off"))
     try:
+        if bind.dialect.name == "postgresql":
+            bind.execute(sa.text("SET LOCAL row_security = off"))
+            bind.execute(
+                sa.text(
+                    "LOCK TABLE user_role_assignments IN SHARE ROW EXCLUSIVE MODE"
+                )
+            )
         live = bind.execute(
             sa.select(sa.func.count())
             .select_from(_USER_ROLE_ASSIGNMENTS)

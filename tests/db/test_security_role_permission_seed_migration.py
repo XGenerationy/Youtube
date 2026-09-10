@@ -21,6 +21,7 @@
 import hashlib
 import importlib.util
 import json
+import re
 from collections.abc import Iterable
 from pathlib import Path
 from types import ModuleType
@@ -90,16 +91,20 @@ SEED_SQL_PATH = PROJECT_ROOT / "backend/ums_smart_revenue/db/security_seed.sql"
 
 # Repinned 2026-09-10: downgrade() now refuses while an ACTIVE beta_operator
 # assignment exists (PR #223 review: a stranded assignment makes a rolled-back
-# binary raise PrincipalDataValidationError for that operator). Upgrade logic
-# and the frozen catalog contract are unchanged.
-_HISTORICAL_MIGRATION_GIT_BLOB = "32f758b0fb28a2346da8673d0f0cee9b477e2ef4"
-_HISTORICAL_MIGRATION_SHA256 = "7e756b9dc82169d8be12d3c22e2ebc16478daede76e885e18820b9aef9235aed"
+# binary raise PrincipalDataValidationError for that operator), the check
+# serializes concurrent writers under SHARE ROW EXCLUSIVE on PostgreSQL, and
+# the AGENTS.md contract blocks were added at module/upgrade/downgrade level.
+# Upgrade logic and the frozen catalog contract are unchanged.
+_HISTORICAL_MIGRATION_GIT_BLOB = "340d98951d5650c736d96705b7d4f421ea48abbd"
+_HISTORICAL_MIGRATION_SHA256 = "e61d0cd2bdb2cb117d085067db7d4c9cee240bde0a618e378a49adc9ff841887"
 # Repinned 2026-09-03: whitespace-only reformat of the frozen literal rows
 # (one key per line, <=100 cols) to clear analyzer line-length findings
 # pre-merge; the parsed catalog data is byte-for-data identical (verified
-# by ast comparison and the semantic digest assertions below).
-_HISTORICAL_SNAPSHOT_GIT_BLOB = "0f7defa1748ebe1a0406bd59dc96567416be0297"
-_HISTORICAL_SNAPSHOT_SHA256 = "afe311d65396b0cdef58dbd73d907b58593ebd7eee28bb3970fe0db89faafef1"
+# by ast comparison and the semantic digest assertions below). Repinned again
+# 2026-09-10 for the AGENTS.md module contract block (comments only — the
+# semantic digest below is unchanged and still proves data identity).
+_HISTORICAL_SNAPSHOT_GIT_BLOB = "b733b81afa07a8b8e295aa73c1936c1f4d916389"
+_HISTORICAL_SNAPSHOT_SHA256 = "1a5137baad0ca3de431813707191ae22a3d7e7f85e511b99995987d9da47df7c"
 _HISTORICAL_SNAPSHOT_SEMANTIC_SHA256 = (
     "376561bbe0f37448800df279d39b161f1f0d9ce03381dfc0c578df3e69704705"
 )
@@ -1090,7 +1095,23 @@ def test_security_seed_sql_matches_the_python_registries() -> None:
     explicit_pairs = set(raw_explicit_pairs)
     assert len(explicit_pairs) == len(raw_explicit_pairs)
     # The SQL file grants super_owner every permission with a SELECT rather than
-    # an explicit tuple per permission, so re-add that implicit fan-out here.
+    # an explicit tuple per permission. Prove the fan-out statement really
+    # exists in the raw seed — without this, dropping or narrowing the SELECT
+    # would still pass here because the expected pairs were fabricated from
+    # PERMISSION_DEFINITIONS rather than read from the SQL text — then re-add
+    # that implicit fan-out so the pair sets can be compared.
+    super_owner_fanout = re.search(
+        r"INSERT\s+INTO\s+role_permission_assignments\s*\(role_key,\s*permission_key\)\s*"
+        r"SELECT\s+'super_owner'\s+AS\s+role_key\s*,\s*key\s+AS\s+permission_key\s*"
+        r"FROM\s+permissions\s+ON\s+CONFLICT\s+DO\s+NOTHING",
+        sql,
+        re.IGNORECASE,
+    )
+    assert super_owner_fanout is not None, (
+        "security_seed.sql no longer fans out every permission row to "
+        "super_owner via INSERT ... SELECT; the manual reseed path would "
+        "silently drop owner access"
+    )
     super_owner_pairs = {
         (RoleKey.SUPER_OWNER.value, permission.value) for permission in PERMISSION_DEFINITIONS
     }

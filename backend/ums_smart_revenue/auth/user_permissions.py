@@ -35,6 +35,21 @@ _GLOBAL_SCOPE_TYPES = frozenset({ScopeType.GLOBAL.value})
 _ACTIVE_GRANT_UNIQUE_INDEX = "uq_active_user_permission_scope"
 
 
+# ============================================================================
+# Purpose: Decide whether an INSERT IntegrityError is the active-grant
+#   uniqueness guard (uq_active_user_permission_scope) so the 409 answer comes
+#   from the violation itself — a post-race re-query can miss a winner already
+#   revoked by a concurrent transaction.
+# Database/ORM: Inspects the DBAPI error (diag.constraint_name on PostgreSQL;
+#   the UNIQUE-constraint column list on SQLite); emits no statements.
+# Standards: Fail closed — unrecognized violations still fall back to the
+#   re-query and re-raise path; nothing is swallowed.
+# Blast Radius: user_permission_grants conflict handling only.
+# Connections:
+#   - File: backend/ums_smart_revenue/db/security_models.py -> index name.
+#   - File: backend/ums_smart_revenue/connectors/credentials.py -> same
+#     classifier pattern.
+# ============================================================================
 def _is_active_grant_unique_violation(exc: IntegrityError) -> bool:
     """Return whether the failure is the active-grant uniqueness guard."""
     diag = getattr(getattr(exc, "orig", None), "diag", None)

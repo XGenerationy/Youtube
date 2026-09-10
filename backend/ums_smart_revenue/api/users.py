@@ -471,6 +471,23 @@ def update_user_account(
     return response
 
 
+# ============================================================================
+# Purpose: Assign a role to a user within a scope; enforces ASSIGN_ROLES plus
+#   role-family grant authority against the populated org index.
+# Database/ORM: user_role_assignments/access_scopes via
+#   SqlAlchemyUserRoleAssignmentRepository on the tenant session; org_units and
+#   youtube_channels read by the current_org_access_index dependency on the
+#   same session.
+# Standards: Thin route — permission gate, then family policy with
+#   OrgAccessIndex scope containment; typed repository errors -> 409/404/422;
+#   the audit row shares the request transaction.
+# Blast Radius: Authorization write + audit. connector_admin remains
+#   Super-Owner-only; finance roles require a Finance Admin/Super Owner
+#   assignment containing the target scope.
+# Connections:
+#   - File: backend/ums_smart_revenue/auth/user_roles.py -> repository + errors.
+#   - File: backend/ums_smart_revenue/api/dependencies_finance.py -> org index.
+# ============================================================================
 @router.post("/{user_id}/roles", status_code=status.HTTP_201_CREATED)
 def assign_user_role(
     user_id: str,
@@ -521,6 +538,20 @@ def assign_user_role(
     return response
 
 
+# ============================================================================
+# Purpose: Revoke an active role assignment; re-checks family grant authority
+#   against the STORED role/scope using the populated org index before writing.
+# Database/ORM: user_role_assignments/access_scopes via
+#   SqlAlchemyUserRoleAssignmentRepository on the tenant session; org_units and
+#   youtube_channels read by the current_org_access_index dependency.
+# Standards: Thin route — permission gate, stored-scope policy check, typed
+#   repository errors -> 404/409/422; audit row shares the request transaction.
+# Blast Radius: Authorization write + audit; scoped authorities cannot revoke
+#   assignments outside their contained subtree.
+# Connections:
+#   - File: backend/ums_smart_revenue/auth/user_roles.py -> repository + errors.
+#   - File: backend/ums_smart_revenue/api/dependencies_finance.py -> org index.
+# ============================================================================
 @router.post("/{user_id}/roles/{assignment_id}/revoke")
 def revoke_user_role(
     user_id: str,
@@ -581,6 +612,23 @@ def revoke_user_role(
     return response
 
 
+# ============================================================================
+# Purpose: Grant a direct permission to a user; enforces ASSIGN_ROLES plus
+#   permission-family authority (Super Owner / Finance Admin / Connector
+#   Admin) against the populated org index.
+# Database/ORM: user_permission_grants/access_scopes via
+#   SqlAlchemyUserPermissionGrantRepository on the tenant session; org_units
+#   and youtube_channels read by the current_org_access_index dependency.
+# Standards: Thin route — permission gate, then family policy with
+#   OrgAccessIndex scope containment; typed repository errors -> 409/404/422;
+#   audit row shares the request transaction.
+# Blast Radius: Authorization write + audit; administrative permissions stay
+#   Super-Owner-only and scoped authorities cannot mint grants outside their
+#   subtree.
+# Connections:
+#   - File: backend/ums_smart_revenue/auth/user_permissions.py -> repository.
+#   - File: backend/ums_smart_revenue/api/dependencies_finance.py -> org index.
+# ============================================================================
 @router.post("/{user_id}/permissions", status_code=status.HTTP_201_CREATED)
 def grant_user_permission(
     user_id: str,
@@ -628,6 +676,20 @@ def grant_user_permission(
     return response
 
 
+# ============================================================================
+# Purpose: Revoke an active permission grant; re-checks family authority
+#   against the STORED permission/scope using the populated org index.
+# Database/ORM: user_permission_grants/access_scopes via
+#   SqlAlchemyUserPermissionGrantRepository on the tenant session; org_units
+#   and youtube_channels read by the current_org_access_index dependency.
+# Standards: Thin route — permission gate, stored-scope policy check, typed
+#   repository errors -> 404/409/422; audit row shares the request transaction.
+# Blast Radius: Authorization write + audit; scoped authorities cannot revoke
+#   grants outside their contained subtree.
+# Connections:
+#   - File: backend/ums_smart_revenue/auth/user_permissions.py -> repository.
+#   - File: backend/ums_smart_revenue/api/dependencies_finance.py -> org index.
+# ============================================================================
 @router.post("/{user_id}/permissions/{grant_id}/revoke")
 def revoke_user_permission(
     user_id: str,
@@ -833,6 +895,20 @@ def _require_role_assignment_policy(
         )
 
 
+# ============================================================================
+# Purpose: Enforce permission-family grant authority and target-scope
+#   containment for direct permission grants/revocations — Super-Owner-only
+#   administrative keys, Finance Admin/Super Owner for finance keys, and
+#   Connector Admin/Super Owner for connector keys.
+# Database/ORM: None directly; evaluates the database-backed UserPrincipal
+#   snapshot plus the request's populated OrgAccessIndex.
+# Standards: Fail closed — disabled or malformed principals and
+#   non-containing scopes yield 403 before any repository write.
+# Blast Radius: Authorization decision for user_permission_grants writes.
+# Connections:
+#   - File: backend/ums_smart_revenue/auth/scopes.py -> OrgAccessIndex.
+#   - File: backend/ums_smart_revenue/auth/user_permissions.py -> grant store.
+# ============================================================================
 def _require_permission_grant_policy(
     user: UserPrincipal,
     permission: Permission,
@@ -878,6 +954,19 @@ def _has_any_role(
     )
 
 
+# ============================================================================
+# Purpose: Decide whether an active role assignment on the principal contains
+#   the target scope under the request's populated OrgAccessIndex (sector ->
+#   company/channel, company -> channel, same-scope equality, global -> all).
+# Database/ORM: None directly; reads the UserPrincipal snapshot and the
+#   request-scoped OrgAccessIndex loaded from org_units/youtube_channels.
+# Standards: Fail closed — disabled users and non-containing scopes return
+#   False; an empty index still answers GLOBAL correctly.
+# Blast Radius: Authorization decision shared by all grant-policy checks.
+# Connections:
+#   - File: backend/ums_smart_revenue/auth/scopes.py -> contains() rules.
+#   - File: backend/ums_smart_revenue/org/access_index.py -> index loader.
+# ============================================================================
 def _has_scoped_role(
     user: UserPrincipal,
     role: RoleKey,

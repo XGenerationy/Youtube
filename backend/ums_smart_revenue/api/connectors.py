@@ -25,6 +25,7 @@ from __future__ import annotations
 
 # pylint: disable=too-many-arguments, too-many-positional-arguments
 import logging
+import threading
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
@@ -1266,23 +1267,41 @@ def _make_after_commit_handler(executor: ConnectorJobExecutor, reservation: _Slo
             logger.exception("Failed to activate connector job reservation after commit")
             # Persist a job_failed_before_start audit row so the accepted
             # 202 has a matching failure row. The original request session
-            # is already committed/closed, so this opens a fresh session
-            # via the executor's own Bucket-A helper. The audit is
-            # best-effort: any error here is logged and never raised
-            # into the request lifecycle.
-            try:
-                executor.audit_failed_before_start(
-                    tenant_id=reservation.tenant_id,
-                    connector_key=reservation.connector_key,
-                    account_id=reservation.account_id,
-                    report_month=reservation.report_month,
-                    error_class=type(exc).__name__,
-                    actor_identity=reservation.actor_identity,
-                )
-            except Exception:  # noqa: BLE001 — best-effort audit
-                logger.exception("Failed to persist activation-failure audit for reservation")
+            # still holds its connection until commit() returns, and the
+            # executor's audit helper opens a FRESH session on the same
+            # engine — on SQLite that engine is a one-slot QueuePool, so a
+            # synchronous audit here would wait out pool_timeout inside the
+            # request and then discard the row. Run it on a daemon thread:
+            # the request returns immediately and the audit's checkout only
+            # waits for the committing session's imminent release. The audit
+            # remains best-effort: any error is logged, never raised into the
+            # request lifecycle.
+            threading.Thread(
+                target=_audit_activation_failure,
+                args=(executor, reservation, type(exc).__name__),
+                daemon=True,
+            ).start()
 
     return _after_commit
+
+
+def _audit_activation_failure(
+    executor: ConnectorJobExecutor,
+    reservation: _SlotReservation,
+    error_class: str,
+) -> None:
+    """Persist the activation-failure audit off the request lifecycle."""
+    try:
+        executor.audit_failed_before_start(
+            tenant_id=reservation.tenant_id,
+            connector_key=reservation.connector_key,
+            account_id=reservation.account_id,
+            report_month=reservation.report_month,
+            error_class=error_class,
+            actor_identity=reservation.actor_identity,
+        )
+    except Exception:  # noqa: BLE001 — best-effort audit
+        logger.exception("Failed to persist activation-failure audit for reservation")
 
 
 def _make_after_rollback_handler(executor: ConnectorJobExecutor, reservation: _SlotReservation):

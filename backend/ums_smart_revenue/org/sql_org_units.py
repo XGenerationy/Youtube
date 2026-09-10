@@ -22,6 +22,22 @@ from sqlalchemy.orm import Session
 from ums_smart_revenue.db.org_models import OrgUnitORM
 
 
+# ============================================================================
+# Purpose: Return the org_units row at the caller's deterministic id, creating
+#   it under a savepoint when absent — the ONLY database write path for
+#   bootstrap/seed org skeletons.
+# Database/ORM: OrgUnitORM (org_units): primary-key get, savepointed insert,
+#   re-read of the winning row when a concurrent deterministic insert wins
+#   the race (IntegrityError confined to the savepoint).
+# Standards: Deterministic caller-supplied ids; a created unit is always
+#   active; the loser's re-read row still flows through the caller's drift
+#   validation so a concurrent writer can never fail this path open.
+# Blast Radius: Registry/org mapping rows only; tenant context, drift policy,
+#   and audit are caller-owned.
+# Connections:
+#   - File: backend/ums_smart_revenue/db/org_models.py -> OrgUnitORM.
+#   - File: scripts/bootstrap_operator.py -> --org-skeleton caller.
+# ============================================================================
 def ensure_org_unit_row(
     session: Session,
     *,

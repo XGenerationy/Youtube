@@ -764,7 +764,9 @@ def test_close_drains_activation_failure_audits_queued_mid_teardown(tmp_path) ->
         assert completed == ["RuntimeError"]
 
         # A submission arriving after close() stops accepting is skipped
-        # cleanly — logged, never raised into the request lifecycle.
+        # cleanly — logged, never raised into the request lifecycle (on
+        # SQLite the post-close fallback is suppressed because the request
+        # session still holds the engine's only pooled connection).
         executor.queue_failed_start_audit(
             tenant_id=TENANT,
             connector_key="youtube_reporting",
@@ -777,3 +779,87 @@ def test_close_drains_activation_failure_audits_queued_mid_teardown(tmp_path) ->
     finally:
         release.set()
         executor.close()
+
+
+def test_close_audits_committed_leftover_reservation_as_shutdown(tmp_path, monkeypatch) -> None:
+    """A marked-committed reservation whose hook never ran is audited.
+
+    The after_commit hook calls ``mark_reservation_committed`` before
+    ``activate`` — the hook can only run post-commit, so a committed-marked
+    reservation still in the registry at close() is an accepted job whose
+    hook died mid-flight. close() must emit ``job_failed_before_start``
+    (ExecutorShutdown) so the 202 keeps its lifecycle edge.
+    """
+    from ums_smart_revenue.connectors.runs import executor as executor_module
+
+    monkeypatch.setattr(executor_module, "_PENDING_HOOK_GRACE_SECONDS", 0.05)
+    factory = _factory(tmp_path)
+    executor = ConnectorJobExecutor(session_factory=factory, max_workers=1, stale_running_hours=6)
+    reservation = executor.submit_if_absent(
+        tenant_id=TENANT,
+        connector_key="youtube_reporting",
+        account_id="acct-1",
+        report_month="2026-03",
+        dry_run=False,
+        triggered_by_user_id=None,
+        actor_identity=ACTOR,
+    )
+    assert reservation is not None
+    executor.mark_reservation_committed(reservation)
+    executor.close()
+
+    with factory() as session:
+        audits = session.scalars(select(AuditLogORM)).all()
+    shutdown = [
+        a
+        for a in audits
+        if a.details.get("action") == "job_failed_before_start"
+        and a.details.get("error_class") == "ExecutorShutdown"
+    ]
+    assert len(shutdown) == 1
+    assert shutdown[0].details["report_month"] == "2026-03"
+
+    # A late queue call for the same job is deduplicated — still one row.
+    executor.queue_failed_start_audit(
+        tenant_id=TENANT,
+        connector_key="youtube_reporting",
+        account_id="acct-1",
+        report_month="2026-03",
+        error_class="RuntimeError",
+        actor_identity=ACTOR,
+    )
+    with factory() as session:
+        audits = session.scalars(select(AuditLogORM)).all()
+    assert len(audits) == 1
+
+
+def test_close_drops_uncommitted_leftover_reservation_without_audit(tmp_path, monkeypatch) -> None:
+    """An unmarked leftover reservation is dropped without a failure row.
+
+    A reservation exists BEFORE the request transaction commits; one still
+    pending after grace with no committed mark belongs to a still-open or
+    rolled-back request — auditing it would invent a failure for a job that
+    was never accepted.
+    """
+    from ums_smart_revenue.connectors.runs import executor as executor_module
+
+    monkeypatch.setattr(executor_module, "_PENDING_HOOK_GRACE_SECONDS", 0.05)
+    factory = _factory(tmp_path)
+    executor = ConnectorJobExecutor(session_factory=factory, max_workers=1, stale_running_hours=6)
+    reservation = executor.submit_if_absent(
+        tenant_id=TENANT,
+        connector_key="youtube_reporting",
+        account_id="acct-1",
+        report_month="2026-03",
+        dry_run=False,
+        triggered_by_user_id=None,
+        actor_identity=ACTOR,
+    )
+    assert reservation is not None
+    executor.close()
+
+    with factory() as session:
+        audits = session.scalars(select(AuditLogORM)).all()
+    assert not any(
+        a.details.get("action") == "job_failed_before_start" for a in audits
+    )

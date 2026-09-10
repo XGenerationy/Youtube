@@ -139,6 +139,7 @@ class _FakeExecutor:
         self.activate_calls: list[dict] = []
         self.cancel_calls: list[dict] = []
         self.queued_audits: list[dict] = []
+        self.committed_marks: list = []
         self.closed = False
 
     def has_active_job(self, **kwargs) -> bool:
@@ -164,6 +165,10 @@ class _FakeExecutor:
         """Record a rollback of the reserved slot; cancellation always succeeds."""
         self.cancel_calls.append({"reservation": reservation})
         return True
+
+    def mark_reservation_committed(self, reservation):
+        """Mirror the real executor's committed-mark hook (after_commit entry)."""
+        self.committed_marks.append(reservation)
 
     def queue_failed_start_audit(self, **kwargs):
         """Record the deferred failure audit the route queues after commit."""

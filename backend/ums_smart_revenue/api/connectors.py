@@ -1273,6 +1273,11 @@ def _make_after_commit_handler(executor: ConnectorJobExecutor, reservation: _Slo
 
     def _after_commit(_session: Session) -> None:
         """Activate the reservation, auditing a failure if activation raises."""
+        # Mark first: this hook can only run after the transaction committed,
+        # so the mark is proof the job was accepted — close() audits only
+        # committed leftovers and never invents a failure row for a rolled
+        # back or still-open request.
+        executor.mark_reservation_committed(reservation)
         try:
             executor.activate(reservation)
         except Exception as exc:  # noqa: BLE001 — best-effort, never raise

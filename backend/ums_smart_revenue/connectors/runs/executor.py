@@ -264,6 +264,12 @@ class ConnectorJobExecutor:
         # never silently rejected mid-teardown.
         self._audit_lock = threading.Lock()
         self._audit_accepting = True
+        # _committed keys: reservations whose after_commit hook entered (proof
+        # the request transaction committed). _shutdown_audited keys: jobs that
+        # already have a job_failed_before_start row, so the hook's queue call
+        # and the shutdown sweep can never double-audit one job.
+        self._committed: set[_JobKey] = set()
+        self._shutdown_audited: set[_JobKey] = set()
         self._finalizer = weakref.finalize(
             self,
             self._shutdown_pools,
@@ -271,6 +277,40 @@ class ConnectorJobExecutor:
             self._audit_executor,
         )
 
+    # ========================================================================
+    # Purpose: Record that a reservation's request transaction committed — the
+    #   after_commit hook can only run post-commit, so the mark is the proof
+    #   close() uses to audit leftovers vs drop uncommitted ones.
+    # Database/ORM: None — in-memory marker on the executor.
+    # Standards: lock-guarded set keyed by the reservation's job key; keys are
+    #   discarded on activate/cancel/queue transitions so the set stays bounded.
+    # Blast Radius: Audit correctness — drives which leftover reservations get
+    #   a job_failed_before_start row at shutdown.
+    # Connections:
+    #   - File: backend/ums_smart_revenue/api/connectors.py -> hook caller.
+    # ========================================================================
+    def mark_reservation_committed(self, reservation: _SlotReservation) -> None:
+        """Record that the reservation's request transaction committed.
+
+        Called by the route's ``after_commit`` hook before ``activate`` — the
+        hook can only run post-commit, so the mark is definitive proof the
+        job was accepted. close() audits only committed leftover reservations
+        as ``ExecutorShutdown``; an unmarked leftover belongs to a still-open
+        or rolled-back transaction and must not gain a failure row.
+        """
+        with self._lock:
+            self._committed.add(reservation.key)
+
+    # ========================================================================
+    # Purpose: Count _SlotReservation registry slots — each is an in-flight
+    #   request whose post-commit hook has not yet resolved the slot.
+    # Database/ORM: None — reads the in-memory registry under _lock.
+    # Standards: read-only; used by close()'s bounded grace loop.
+    # Blast Radius: None detected.
+    # Connections:
+    #   - File: backend/ums_smart_revenue/connectors/runs/executor.py ->
+    #     close() grace loop + _audit_pending_on_shutdown.
+    # ========================================================================
     def _pending_reservations(self) -> int:
         """Count registry slots still held by a not-yet-activated reservation.
 
@@ -457,7 +497,9 @@ class ConnectorJobExecutor:
                 # the real failure instead of a phantom in-flight slot.
                 if self._registry.get(key) is reservation:
                     del self._registry[key]
+                self._committed.discard(key)
                 raise
+            self._committed.discard(key)
             self._stash_and_register(
                 future=future,
                 key=key,
@@ -539,6 +581,7 @@ class ConnectorJobExecutor:
             current = self._registry.get(reservation.key)
             if current is reservation:
                 self._registry.pop(reservation.key, None)
+                self._committed.discard(reservation.key)
                 return True
         return False
 
@@ -623,31 +666,42 @@ class ConnectorJobExecutor:
         running or completed future is left alone -- it (or its worker) owns
         the audit trail.
 
-        A ``_SlotReservation`` still live when this runs means its request
-        committed but the post-commit hook never completed (the grace window
-        in ``close()`` expired or the request died): the client may hold a
-        202, so the reservation is audited ``ExecutorShutdown`` rather than
-        dropped. If its hook does fire afterwards it fails activation and
-        queues the same audit — at worst a duplicate honest failure row,
-        which is preferable to an accepted job with no lifecycle record.
+        A ``_SlotReservation`` still live when this runs is audited only if
+        its ``after_commit`` hook already marked it committed — proof the
+        request transaction committed and the client holds (or held) a 202.
+        An UNMARKED leftover belongs to a transaction that is still open or
+        was rolled back; auditing it would write a phantom failure row for a
+        job that was never accepted, so it is dropped without a row. If a
+        marked reservation's hook fires after this sweep, its queue call is
+        skipped by the ``_shutdown_audited`` dedupe — one job, one failure
+        row.
 
         The registry is cleared because no new work can be accepted after
         shutdown; running futures will deregister harmlessly when they finish.
         """
+        # The registry clear, the committed check, and the audited-mark all
+        # happen inside one critical section (self._lock -> self._audit_lock;
+        # the queue path only ever takes _audit_lock, so there is no cycle).
+        # A late after_commit queue call either ran before this (its own row
+        # is the only one) or runs after (the key is already marked and the
+        # call is skipped) — never two failure rows for one job.
         with self._lock:
             entries = list(self._registry.items())
             self._registry.clear()
-
-        cancelled: list[tuple[_JobKey, ConnectorJobActor]] = []
-        for job_key, entry in entries:
-            if isinstance(entry, _SlotReservation):
+            cancelled: list[tuple[_JobKey, ConnectorJobActor]] = []
+            for job_key, entry in entries:
+                if isinstance(entry, _SlotReservation):
+                    if job_key in self._committed:
+                        cancelled.append((job_key, entry.actor_identity))
+                    continue
+                if not isinstance(entry, _ActiveJob):
+                    continue
+                if not entry.future.cancelled():
+                    continue
                 cancelled.append((job_key, entry.actor_identity))
-                continue
-            if not isinstance(entry, _ActiveJob):
-                continue
-            if not entry.future.cancelled():
-                continue
-            cancelled.append((job_key, entry.actor_identity))
+            with self._audit_lock:
+                for job_key, _actor in cancelled:
+                    self._shutdown_audited.add(job_key)
 
         for job_key, actor_identity in cancelled:
             tenant_id, connector_key, account_id, report_month = job_key
@@ -1023,30 +1077,63 @@ class ConnectorJobExecutor:
         so an in-flight audit outlives the shutdown that triggered it. A
         submit failure after the audit pool closed is logged, never raised.
         """
-        try:
-            with self._audit_lock:
-                if not self._audit_accepting:
-                    logger.error(
-                        "Dropping job_failed_before_start audit: executor is "
-                        "closing (tenant=%s connector=%s account=%s month=%s)",
-                        tenant_id,
-                        connector_key,
-                        account_id,
-                        report_month,
+        key = (tenant_id, connector_key, account_id, report_month)
+        with self._audit_lock:
+            if key in self._shutdown_audited:
+                # close() already emitted this job's failure row.
+                return
+            if self._audit_accepting:
+                try:
+                    self._audit_executor.submit(
+                        self._audit_failed_before_start,
+                        tenant_id=tenant_id,
+                        connector_key=connector_key,
+                        account_id=account_id,
+                        report_month=report_month,
+                        error_class=error_class,
+                        actor_identity=actor_identity,
                     )
-                    return
-                self._audit_executor.submit(
-                    self._audit_failed_before_start,
-                    tenant_id=tenant_id,
-                    connector_key=connector_key,
-                    account_id=account_id,
-                    report_month=report_month,
-                    error_class=error_class,
-                    actor_identity=actor_identity,
-                )
+                    self._shutdown_audited.add(key)
+                except Exception:  # noqa: BLE001 — best-effort, never escape
+                    logger.exception(
+                        "Failed to queue job_failed_before_start audit "
+                        "(tenant=%s)",
+                        tenant_id,
+                    )
+                return
+            # Pool closed mid-teardown: claim the fallback so a second call
+            # for this job cannot double-write.
+            self._shutdown_audited.add(key)
+        # Last-resort synchronous write for a submission that arrived after
+        # the audit pool closed — the request committed, so the row must not
+        # be silently dropped. Skipped on SQLite: inside after_commit the
+        # request session still holds the engine's only pooled connection,
+        # so a fresh-session write here would stall on pool_timeout and
+        # discard the row anyway.
+        bind = self._session_factory.kw.get("bind")
+        if bind is not None and bind.dialect.name == "sqlite":
+            logger.error(
+                "Dropping job_failed_before_start audit after audit-pool "
+                "close on SQLite (tenant=%s connector=%s account=%s month=%s)",
+                tenant_id,
+                connector_key,
+                account_id,
+                report_month,
+            )
+            return
+        try:
+            self._audit_failed_before_start(
+                tenant_id=tenant_id,
+                connector_key=connector_key,
+                account_id=account_id,
+                report_month=report_month,
+                error_class=error_class,
+                actor_identity=actor_identity,
+            )
         except Exception:  # noqa: BLE001 — best-effort audit, never escape
             logger.exception(
-                "Failed to queue job_failed_before_start audit (tenant=%s)",
+                "Failed to persist job_failed_before_start audit after "
+                "audit-pool close (tenant=%s)",
                 tenant_id,
             )
 

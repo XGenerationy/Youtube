@@ -32,6 +32,11 @@ def check_database_readiness(session_factory: SessionFactory | None) -> None:
     ``None`` is an intentional not-ready state: an app created without a
     database is useful for route/unit tests and liveness, but it cannot serve
     operational API traffic backed by PostgreSQL/SQLite.
+
+    Raises:
+        ReadinessUnavailableError: the session factory is ``None`` (the app
+            was created without a configured database), or the trivial read
+            failed (SQLAlchemy or driver-level connection error).
     """
     if session_factory is None:
         raise ReadinessUnavailableError("database is not configured")

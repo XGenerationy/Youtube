@@ -1846,3 +1846,40 @@ def test_leveled_third_party_logger_is_filtered_at_the_handler():
         out = capture.getvalue()
         assert "below-floor library warning" not in out
         assert "first-party error passes" in out
+
+
+def test_redaction_preserves_uvicorn_access_formatter_contract() -> None:
+    """uvicorn.access records keep their five-argument tuple for AccessFormatter."""
+    import logging
+
+    from uvicorn.logging import AccessFormatter
+
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=(
+            "127.0.0.1:5000",
+            "GET",
+            "/health?access_token=secret-token-value",
+            "1.1",
+            200,
+        ),
+        exc_info=None,
+    )
+    root = logging.getLogger()
+    handler = logging.StreamHandler(io.StringIO())
+    handler.setFormatter(AccessFormatter("%(message)s"))
+    root.addHandler(handler)
+    try:
+        configuration = configure_logging(level="INFO", stream=io.StringIO())
+        logging.getLogger("uvicorn.access").handle(record)
+    finally:
+        restore_logging(configuration)
+        root.removeHandler(handler)
+        handler.close()
+    rendered = handler.stream.getvalue() if hasattr(handler, "stream") else ""
+    assert "secret-token-value" not in rendered, rendered
+    assert "200" in rendered and "GET" in rendered, rendered

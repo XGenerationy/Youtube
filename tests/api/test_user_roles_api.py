@@ -21,7 +21,7 @@ COMPANY_ID = "company-tv-a"
 
 
 def auth_headers(role: str, user_id: UUID = ADMIN_ID) -> dict[str, str]:
-    """Build trust-gateway auth headers for the given role and user."""
+    """Return trusted-gateway headers for one actor and tenant."""
     return {
         "x-user-id": str(user_id),
         "x-user-email": f"{role}@example.com",
@@ -32,12 +32,12 @@ def auth_headers(role: str, user_id: UUID = ADMIN_ID) -> dict[str, str]:
 
 
 def build_database_url(tmp_path) -> str:
-    """Return the SQLite URL for an isolated per-test role-assignment database."""
+    """Return the disposable SQLite URL backing these API tests."""
     return f"sqlite+pysqlite:///{(tmp_path / 'user-roles.db').as_posix()}"
 
 
 def seed_database(database_url: str, *, target_is_service_account: bool = False) -> None:
-    """Create schema tables and seed users plus the role/permission catalogs."""
+    """Seed one disposable database for the scenario under test."""
     engine = create_engine(database_url)
     SecurityBase.metadata.create_all(engine)
     with Session(engine) as session:
@@ -65,7 +65,7 @@ def seed_database(database_url: str, *, target_is_service_account: bool = False)
 
 
 def test_corporate_admin_assigns_scoped_assistant_role_with_audit(tmp_path):
-    """Corporate Admin assigns a scoped assistant role and the write is audited."""
+    """Corporate admin assigns scoped assistant role with audit."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -98,7 +98,7 @@ def test_corporate_admin_assigns_scoped_assistant_role_with_audit(tmp_path):
 
 
 def test_assign_role_rejects_unknown_actor_before_assignment_write(tmp_path):
-    """An unknown grantor is rejected before any assignment row is written."""
+    """Assign role rejects unknown actor before assignment write."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     unknown_actor_id = UUID("00000000-0000-0000-0000-000000014999")
@@ -127,7 +127,7 @@ def test_assign_role_rejects_unknown_actor_before_assignment_write(tmp_path):
 
 
 def test_assistant_cannot_assign_roles_or_probe_users(tmp_path):
-    """A role without roles.assign can neither assign nor probe user roles."""
+    """Assistant cannot assign roles or probe users."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -148,7 +148,7 @@ def test_assistant_cannot_assign_roles_or_probe_users(tmp_path):
 
 
 def test_corporate_admin_assigns_company_scoped_export_operator(tmp_path):
-    """Corporate Admin assigns an org-scoped export-operator role."""
+    """Corporate admin assigns company scoped export operator."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -171,7 +171,7 @@ def test_corporate_admin_assigns_company_scoped_export_operator(tmp_path):
 
 
 def test_corporate_admin_cannot_assign_finance_role(tmp_path):
-    """Corporate Admin is denied assigning finance-family roles."""
+    """Corporate admin cannot assign finance role."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -242,7 +242,7 @@ def test_finance_authority_can_assign_and_revoke_beta_operator(tmp_path, authori
 
 
 def test_finance_admin_can_assign_finance_viewer_role(tmp_path):
-    """Finance Admin may assign the finance-viewer role."""
+    """Finance admin can assign finance viewer role."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -264,7 +264,7 @@ def test_finance_admin_can_assign_finance_viewer_role(tmp_path):
 
 
 def test_corporate_admin_cannot_assign_super_owner(tmp_path):
-    """The super_owner role cannot be granted through the API."""
+    """Corporate admin cannot assign super owner."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -284,7 +284,7 @@ def test_corporate_admin_cannot_assign_super_owner(tmp_path):
 
 
 def test_incompatible_scope_type_rejected_before_persisting(tmp_path):
-    """A scope type the role disallows is rejected before any write."""
+    """Incompatible scope type rejected before persisting."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -327,7 +327,7 @@ def test_incompatible_scope_type_rejected_before_persisting(tmp_path):
 
 
 def test_corporate_admin_revokes_role_assignment_with_audit(tmp_path):
-    """Corporate Admin revokes an assignment and the revoke is audited."""
+    """Corporate admin revokes role assignment with audit."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -367,7 +367,7 @@ def test_corporate_admin_revokes_role_assignment_with_audit(tmp_path):
 
 
 def test_corporate_admin_cannot_revoke_finance_role(tmp_path):
-    """Corporate Admin is denied revoking finance-family roles."""
+    """Corporate admin cannot revoke finance role."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -423,7 +423,7 @@ def test_corporate_admin_cannot_revoke_beta_operator(tmp_path):
 
 
 def test_finance_admin_can_revoke_finance_viewer_role(tmp_path):
-    """Finance Admin may revoke the finance-viewer role."""
+    """Finance admin can revoke finance viewer role."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))

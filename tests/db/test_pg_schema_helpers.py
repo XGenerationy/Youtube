@@ -51,7 +51,7 @@ def test_non_test_database_is_rejected_before_connection(
     connected = False
 
     def unexpected_create_engine(*args: object, **kwargs: object) -> None:
-        """Mark the test failed: rejection must happen before engine creation."""
+        """Fail the test if production code builds an engine unexpectedly."""
         nonlocal connected
         connected = True
 

@@ -22,7 +22,7 @@ COMPANY_ID = "company-tv-a"
 
 
 def auth_headers(role: str, user_id: UUID = ADMIN_ID) -> dict[str, str]:
-    """Build trust-gateway auth headers for the given role and user."""
+    """Return trusted-gateway headers for one actor and tenant."""
     return {
         "x-user-id": str(user_id),
         "x-user-email": f"{role}@example.com",
@@ -33,12 +33,12 @@ def auth_headers(role: str, user_id: UUID = ADMIN_ID) -> dict[str, str]:
 
 
 def build_database_url(tmp_path) -> str:
-    """Return the SQLite URL for an isolated per-test permission-grant database."""
+    """Return the disposable SQLite URL backing these API tests."""
     return f"sqlite+pysqlite:///{(tmp_path / 'user-permissions.db').as_posix()}"
 
 
 def seed_database(database_url: str) -> None:
-    """Create schema tables and seed users plus the role/permission catalogs."""
+    """Seed one disposable database for the scenario under test."""
     engine = create_engine(database_url)
     SecurityBase.metadata.create_all(engine)
     with Session(engine) as session:
@@ -70,7 +70,7 @@ def seed_database(database_url: str) -> None:
 
 
 def test_finance_admin_grants_scoped_revenue_permission_with_audit(tmp_path):
-    """Finance Admin grants a scoped revenue permission and the grant is audited."""
+    """Finance admin grants scoped revenue permission with audit."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -104,7 +104,7 @@ def test_finance_admin_grants_scoped_revenue_permission_with_audit(tmp_path):
 
 
 def test_corporate_admin_can_grant_non_finance_permission(tmp_path):
-    """Corporate Admin may grant a permission outside the finance family."""
+    """Corporate admin can grant non finance permission."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -126,7 +126,7 @@ def test_corporate_admin_can_grant_non_finance_permission(tmp_path):
 
 
 def test_corporate_admin_cannot_grant_finance_permission(tmp_path):
-    """Corporate Admin is denied granting finance-family permissions."""
+    """Corporate admin cannot grant finance permission."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -147,7 +147,7 @@ def test_corporate_admin_cannot_grant_finance_permission(tmp_path):
 
 
 def test_manual_revenue_permission_is_global_and_finance_admin_controlled(tmp_path):
-    """The manual-revenue import permission is global-scope and finance-gated."""
+    """Manual revenue grants must stay global and finance-admin controlled."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -176,7 +176,7 @@ def test_manual_revenue_permission_is_global_and_finance_admin_controlled(tmp_pa
 
 
 def test_manual_revenue_permission_rejects_non_global_scope(tmp_path):
-    """Non-global scopes are rejected for the manual-revenue permission."""
+    """Manual revenue grants reject any tenant-scoped assignment."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -197,7 +197,7 @@ def test_manual_revenue_permission_rejects_non_global_scope(tmp_path):
 
 
 def test_finalized_payment_permission_rejects_org_scope_grant(tmp_path):
-    """Org scopes are rejected for the finalized-payments permission."""
+    """Finalized payment permission rejects org scope grant."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -218,7 +218,7 @@ def test_finalized_payment_permission_rejects_org_scope_grant(tmp_path):
 
 
 def test_finalized_payment_permission_allows_finance_month_grant(tmp_path):
-    """A finance_month scope is accepted for the finalized-payments permission."""
+    """Finalized payment permission allows finance month grant."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -240,7 +240,7 @@ def test_finalized_payment_permission_allows_finance_month_grant(tmp_path):
 
 
 def test_assistant_cannot_grant_permissions_or_probe_users(tmp_path):
-    """A role without users.manage can neither grant nor probe user grants."""
+    """Assistant cannot grant permissions or probe users."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -261,7 +261,7 @@ def test_assistant_cannot_grant_permissions_or_probe_users(tmp_path):
 
 
 def test_finance_admin_revokes_finance_permission_with_audit(tmp_path):
-    """Finance Admin revokes a finance permission and the revoke is audited."""
+    """Finance admin revokes finance permission with audit."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -300,7 +300,7 @@ def test_finance_admin_revokes_finance_permission_with_audit(tmp_path):
 
 
 def test_corporate_admin_cannot_revoke_finance_permission(tmp_path):
-    """Corporate Admin is denied revoking finance-family permissions."""
+    """Corporate admin cannot revoke finance permission."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))
@@ -328,7 +328,7 @@ def test_corporate_admin_cannot_revoke_finance_permission(tmp_path):
 
 
 def test_duplicate_active_permission_grant_is_rejected(tmp_path):
-    """Granting an identical still-active grant twice returns 409."""
+    """Duplicate active permission grant is rejected."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     client = TestClient(create_app(database_url=database_url))

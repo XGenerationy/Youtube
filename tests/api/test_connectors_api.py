@@ -32,7 +32,12 @@ from ums_smart_revenue.app import create_app
 from ums_smart_revenue.auth.models import RoleAssignment, UserPrincipal
 from ums_smart_revenue.auth.roles import RoleKey
 from ums_smart_revenue.auth.scopes import AccessScope
-from ums_smart_revenue.config.settings import load_app_settings
+from ums_smart_revenue.config.settings import (
+    AUTHZ_SOURCE_ENV,
+    GOOGLE_CONNECTOR_SERVICE_ACTOR_PLACEHOLDER_ID,
+    TENANT_PRIMARY_CURRENCY_ENV,
+    load_app_settings,
+)
 from ums_smart_revenue.connectors.credentials import (
     ConnectorCredentialEntry,
     ConnectorCredentialPage,
@@ -133,28 +138,35 @@ class _FakeExecutor:
         self.submit_calls: list[dict] = []
         self.activate_calls: list[dict] = []
         self.cancel_calls: list[dict] = []
+        self.closed = False
 
     def has_active_job(self, **kwargs) -> bool:
-        """Answer from the flag set at construction time."""
+        """Return the configured active flag, ignoring the query filters."""
         return self.active
 
     def submit_if_absent(self, **kwargs):
-        """Record the call and mimic the atomic duplicate check."""
-        # Record the call and mimic the atomic check: if ``active`` is set
-        # the route receives None and falls into the duplicate path.
+        """Record the call and mimic the atomic duplicate check.
+
+        If ``active`` is set the route receives None and falls into the
+        duplicate path; otherwise a fake reservation is returned.
+        """
         self.submit_calls.append(kwargs)
         if self.active:
             return None
         return _FakeReservation(kwargs)
 
     def activate(self, reservation):
-        """Record that the executor activated the reserved slot."""
+        """Record the reservation activation."""
         self.activate_calls.append({"reservation": reservation})
 
     def cancel_reservation(self, reservation):
-        """Record that the executor cancelled the reserved slot."""
+        """Record a rollback of the reserved slot; cancellation always succeeds."""
         self.cancel_calls.append({"reservation": reservation})
         return True
+
+    def close(self) -> None:
+        """Mirror the production executor lifecycle used by app shutdown."""
+        self.closed = True
 
 
 class _FakeReservation:
@@ -186,7 +198,7 @@ def _seed_active_credential(
     credential_smoked: bool = True,
     token_expiry_at: datetime | None = None,
 ):
-    """Insert one connector credential row with the given smoke/expiry state."""
+    """Seed one youtube_reporting credential row for the content-owner-1 account."""
     engine = create_engine(database_url)
     # The jobs route reads connector_runs for the dup/orphan guard; ensure the
     # ReportBase tables exist so the reader runs against a real (empty) table.
@@ -436,8 +448,45 @@ def test_revenue_operations_admin_can_request_connector_job_and_audit(tmp_path):
     assert fake.cancel_calls == []
 
 
+def test_connector_job_runtime_ignores_currency_changed_after_headers_app_start(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gateway and job settings reads defer a currency already fixed at app boot."""
+    monkeypatch.setenv(AUTHZ_SOURCE_ENV, "headers")
+    monkeypatch.delenv(TENANT_PRIMARY_CURRENCY_ENV, raising=False)
+    load_app_settings.cache_clear()
+    database_url = build_database_url(tmp_path)
+    seed_database(database_url)
+    _seed_active_credential(database_url)
+    fake = _FakeExecutor(active=False)
+    app = _enable_executor_app(database_url, fake)
+
+    monkeypatch.setenv(TENANT_PRIMARY_CURRENCY_ENV, "not-a-currency")
+    load_app_settings.cache_clear()
+    with TestClient(app) as client:
+        response = client.post(
+            "/connectors/jobs",
+            headers=auth_headers(
+                "revenue_operations_admin",
+                "connector",
+                "youtube_reporting",
+            ),
+            json={
+                "connector_key": "youtube_reporting",
+                "account_id": "content-owner-1",
+                "report_month": "2026-03",
+                "reason": "Validate mode-independent runtime settings reads",
+            },
+        )
+
+    assert response.status_code == 202, response.text
+    assert len(fake.activate_calls) == 1
+    assert fake.closed is True
+
+
 def test_request_connector_job_live_requires_successful_credential_smoke(tmp_path):
-    """A live job request is rejected before submit when the smoke never succeeded."""
+    """A live submission for an account whose credential smoke never succeeded is rejected 422."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     _seed_active_credential(database_url, credential_smoked=False)
@@ -470,7 +519,7 @@ def test_request_connector_job_live_requires_successful_credential_smoke(tmp_pat
 
 
 def test_request_connector_job_live_requires_unexpired_credential_smoke(tmp_path):
-    """A stale (expired-token) credential smoke rejects the live job request."""
+    """A smoke that succeeded but whose token already expired is rejected 422."""
     database_url = build_database_url(tmp_path)
     seed_database(database_url)
     _seed_active_credential(
@@ -807,6 +856,54 @@ def test_request_connector_job_503_service_principal_unavailable(tmp_path):
     assert fake.cancel_calls == []
 
 
+def test_request_connector_job_503_placeholder_service_actor(tmp_path):
+    """The .env.example placeholder UUID gets the same synchronous 503 as a
+    missing id, instead of a 202 for a job that can never start.
+
+    The pre-flight gate treats the well-known template value as
+    unconfigured: no worker slot reserved, no job_submitted row, the
+    typed service_principal_unavailable rejection. A copied-template
+    deployment must hear "configured wrong" at submit time, not discover
+    it in worker logs after a 202.
+    """
+    database_url = build_database_url(tmp_path)
+    seed_database(database_url)
+    _seed_active_credential(database_url)
+    # The template value, not a missing one: pre-flight must refuse it too.
+    os.environ["UMS_GOOGLE_CONNECTOR_SERVICE_ACTOR_ID"] = (
+        GOOGLE_CONNECTOR_SERVICE_ACTOR_PLACEHOLDER_ID
+    )
+    os.environ["UMS_CONNECTOR_JOB_EXECUTOR_ENABLED"] = "true"
+    load_app_settings.cache_clear()
+    app = create_app(database_url=database_url)
+    fake = _FakeExecutor()
+    app.state.connector_job_executor = fake
+    client = TestClient(app)
+
+    response = client.post(
+        "/connectors/jobs",
+        headers=auth_headers("revenue_operations_admin", "connector", "youtube_reporting"),
+        json={
+            "connector_key": "youtube_reporting",
+            "account_id": "content-owner-1",
+            "report_month": "2026-03",
+            "reason": "Template actor must be refused at submit",
+        },
+    )
+
+    engine = create_engine(database_url)
+    with Session(engine) as session:
+        audit_log = session.scalars(select(AuditLogORM)).one()
+    engine.dispose()
+    assert response.status_code == 503
+    assert audit_log.details["action"] == "job_rejected"
+    assert audit_log.details["rejection"] == "service_principal_unavailable"
+    # Pre-flight rejection: no reservation, no activate, no cancel.
+    assert fake.submit_calls == []
+    assert fake.activate_calls == []
+    assert fake.cancel_calls == []
+
+
 def test_request_connector_job_dry_run_skips_service_principal_preflight(
     tmp_path,
 ) -> None:
@@ -967,7 +1064,7 @@ def test_request_connector_job_activate_failure_writes_bucket_a_audit(
         """Fake executor whose activate() raises to simulate shutdown."""
 
         def activate(self, reservation):  # type: ignore[override]
-            """Record the call, then fail to simulate a shutdown rejection."""
+            """Record the activation, then simulate a shutdown rejection."""
             self.activate_calls.append({"reservation": reservation})
             raise RuntimeError("simulated shutdown rejecting new work")
 
@@ -979,8 +1076,7 @@ def test_request_connector_job_activate_failure_writes_bucket_a_audit(
     # _FakeExecutor doesn't ship with that method, so install a passthrough.
 
     def _noop(*_args, **_kwargs):
-        """Passthrough stand-in when the fake ships no audit method."""
-        return None
+        """Passthrough standing in for the audit hook the fake lacks."""
 
     real_audit = _ActivateFailExecutor.__dict__.get("_audit_failed_before_start")
     if real_audit is None:
@@ -1698,14 +1794,14 @@ def test_credential_health_returns_telemetry_and_state_for_viewer(tmp_path):
 
 
 class _TenantRecordingHealthRepository:
-    """Health repository stub that records the tenant and connector binding."""
+    """Health-repository stub recording the tenant binding it was asked for."""
 
     def __init__(self) -> None:
         self.bound_tenant_id: UUID | str | None = None
         self.connector_keys: frozenset[str] | None = None
 
     def for_tenant(self, tenant_id: UUID | str) -> Self:
-        """Record the tenant the route bound the repository to."""
+        """Bind the stub to a tenant and return it for chaining."""
         self.bound_tenant_id = tenant_id
         return self
 
@@ -1716,7 +1812,21 @@ class _TenantRecordingHealthRepository:
         offset: int = 0,
         connector_keys: frozenset[str] | None = None,
     ) -> ConnectorCredentialPage:
-        """Return a single-credential page while recording the filter."""
+        """Record the connector-key filter and return a one-entry page.
+
+        The single ``acct-other`` entry is the fixture the caller asserts
+        on; the page is intentionally non-empty so the test proves the
+        entries came through the tenant-bound read, not from a vacuous
+        empty result.
+
+        Args:
+            limit: Maximum number of credentials requested by the caller.
+            offset: Number of credentials skipped by the caller.
+            connector_keys: Optional connector-key filter recorded by the stub.
+
+        Returns:
+            A one-entry ``ConnectorCredentialPage`` for the tenant-bound read.
+        """
         self.connector_keys = connector_keys
         return ConnectorCredentialPage(
             items=[

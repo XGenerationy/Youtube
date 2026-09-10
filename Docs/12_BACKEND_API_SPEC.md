@@ -7,6 +7,8 @@ Define initial API endpoints for the UMS Smart Revenue Control Center.
 
 ```text
 /auth
+/session
+/tenants
 /users
 /org-units
 /channels
@@ -36,6 +38,29 @@ The trusted gateway still supplies identity headers, but authorization can run i
 Database authorization rejects unknown users and disabled users before route code executes.
 
 ## Example endpoints
+
+### Session and tenant context
+
+```http
+GET /session/me
+GET /tenants/me
+```
+
+Both authenticated responses expose the resolved tenant's additive
+`primary_currency` field as a three-letter uppercase ISO-4217 code. In
+`GET /tenants/me`, it appears beside `id`, `slug`, and `display_name`; in
+`GET /session/me`, it appears inside the optional `tenant` object beside the
+same identity fields. The field is the tenant's declared reporting **label**,
+not an exchange rate or proof that every stored amount uses that currency. UMS
+does not convert finance values from this field.
+
+The source is authorization-mode specific. `headers` mode fabricates the
+bootstrap tenant from the strictly validated `UMS_TENANT_PRIMARY_CURRENCY`
+setting (default `USD`). `database` mode ignores that setting and resolves
+`tenants.primary_currency` from PostgreSQL, the source of truth. Therefore a
+future database-mode EGP flip requires a reviewed, tenant-scoped data
+migration/backfill with captured prior values for rollback; changing the
+environment setting alone cannot alter the database response.
 
 ### Channels
 
@@ -1158,6 +1183,22 @@ the generated workbook through the configured export artifact store, records a
 byte size, SHA-256 checksum, and marks the export job `COMPLETED`. If artifact
 storage fails before completion, the job remains non-terminal and retryable, the
 endpoint returns `503`, and does not emit `EXPORT_DOWNLOADED`.
+
+All four artifact routes (`analytics-summary.csv`, `finance-workbook.xlsx`,
+`executive.pdf`, and `branded-slide-pack.pptx`) also accept `prepare=true` for
+the dashboard's bounded-memory download handshake. Preparation executes the
+same trusted-gateway principal load, tenant/owner lookup, per-type permission
+checks, generation, persistence, and storage validation as the ordinary GET,
+durably commits the artifact metadata before returning `204`, includes
+`Cache-Control: no-store`, carries no artifact body, and does not emit
+`EXPORT_DOWNLOADED`. The browser then performs an ordinary same-origin GET;
+that second request is independently authenticated and authorized, returns the
+persisted artifact with its existing `Content-Disposition` plus
+`Cache-Control: no-store`, and emits the normal sensitive-read and download
+audit records. Preventing both responses from being cached is part of the
+authorization/audit contract: neither leg may be reused without re-entering the
+gateway. No tenant, principal, bearer grant, or gateway secret is accepted in
+the URL.
 
 `GET /exports/{export_id}/executive.pdf` supports `EXECUTIVE_PDF` export jobs.
 It uses the same finance export, revenue visibility, finalized-payment, and

@@ -35,6 +35,27 @@ from ums_smart_revenue.tenancy.context import get_current_tenant
 
 _DEFAULT_TENANT_UUID = UUID(UMS_TENANT_ID)
 
+_ACTIVE_ASSIGNMENT_UNIQUE_INDEX = "uq_active_user_role_scope"
+
+
+def _is_active_assignment_unique_violation(exc: IntegrityError) -> bool:
+    """Return whether the failure is the active-assignment uniqueness guard."""
+    diag = getattr(getattr(exc, "orig", None), "diag", None)
+    if getattr(diag, "constraint_name", None) == _ACTIVE_ASSIGNMENT_UNIQUE_INDEX:
+        return True
+    # PostgreSQL exposes the partial index via diag.constraint_name; SQLite
+    # reports the indexed column list instead, so require the UNIQUE prefix —
+    # a NOT NULL/CHECK failure names the same columns without meaning a
+    # duplicate.
+    error_text = f"{exc.orig!s} {exc!s}"
+    return (
+        _ACTIVE_ASSIGNMENT_UNIQUE_INDEX in error_text
+        or (
+            "UNIQUE constraint failed" in error_text
+            and "user_role_assignments.role_key" in error_text
+        )
+    )
+
 
 @dataclass(frozen=True)
 class UserRoleAssignmentEntry:
@@ -176,6 +197,15 @@ class SqlAlchemyUserRoleAssignmentRepository:
                 self._session.add(row)
                 self._session.flush()
         except IntegrityError as exc:
+            # FIX: Classify the violated constraint from the error itself
+            # before any re-query. A concurrent revoker can commit between our
+            # failed insert and the follow-up read, leaving the winning row
+            # already inactive; trusting only the re-query would then leak the
+            # raw IntegrityError as a 500 instead of the truthful conflict.
+            if _is_active_assignment_unique_violation(exc):
+                raise UserRoleAssignmentConflictError(
+                    "Active role assignment already exists"
+                ) from exc
             duplicate = self._session.scalars(
                 select(UserRoleAssignmentORM)
                 .where(

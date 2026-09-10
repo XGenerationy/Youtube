@@ -264,6 +264,18 @@ class ConnectorJobExecutor:
             self._audit_executor,
         )
 
+    # ========================================================================
+    # Purpose: GC backstop — stop the worker and audit pools if close() was
+    #   never invoked so neither pool keeps interpreter threads alive.
+    # Database/ORM: None — thread-pool lifecycle only.
+    # Standards: non-blocking shutdown (wait=False, cancel queued futures);
+    #   deterministic drain semantics live in close(), not here.
+    # Blast Radius: Process lifecycle; a bypassed close() can drop queued
+    #   audits — exactly why close() is the real contract.
+    # Connections:
+    #   - File: backend/ums_smart_revenue/connectors/runs/executor.py ->
+    #     close() is the ordered drain; this is the fallback only.
+    # ========================================================================
     @staticmethod
     def _shutdown_pools(
         executor: ThreadPoolExecutor,
@@ -273,6 +285,21 @@ class ConnectorJobExecutor:
         executor.shutdown(wait=False, cancel_futures=True)
         audit_executor.shutdown(wait=False)
 
+    # ========================================================================
+    # Purpose: Deterministic executor shutdown from the app lifespan — cancel
+    #   queued work, audit cancelled futures, then drain the audit pool.
+    # Database/ORM: audit_logs writes via _audit_pending_on_shutdown (own
+    #   session) plus queued queue_failed_start_audit tasks before close
+    #   returns.
+    # Standards: ordered teardown — worker pool stops, pending audits write,
+    #   audit pool drains with wait=True under the _audit_accepting lock; the
+    #   weakref finalizer is the GC fallback only.
+    # Blast Radius: Audit completeness — anything not drained here loses its
+    #   job_failed_before_start row.
+    # Connections:
+    #   - File: backend/ums_smart_revenue/app.py -> lifespan calls close().
+    #   - File: tests/connectors/runs/test_executor.py -> drain interleavings.
+    # ========================================================================
     def close(self) -> None:
         """Shut the pool down deterministically (called from the app lifespan).
 
@@ -912,6 +939,20 @@ class ConnectorJobExecutor:
             if token is not None:
                 TENANT_CTX.reset(token)
 
+    # ========================================================================
+    # Purpose: Queue a route-level activation-failure audit on the tracked
+    #   single-worker pool so the committing request never waits on a session
+    #   checkout inside after_commit.
+    # Database/ORM: audit_logs write deferred to _audit_failed_before_start on
+    #   the audit worker's own session (platform_lane elevation).
+    # Standards: accepting-flag + lock serialize submissions against close();
+    #   post-close submissions are logged and skipped — never raised into the
+    #   request lifecycle.
+    # Blast Radius: Audit completeness for accepted connector jobs only.
+    # Connections:
+    #   - File: backend/ums_smart_revenue/api/connectors.py -> after_commit
+    #     hook is the sole caller.
+    # ========================================================================
     def queue_failed_start_audit(
         self,
         *,

@@ -1,3 +1,20 @@
+# ============================================================================
+# Purpose: User-administration API — account lifecycle (create/update/status),
+#   role assignments, and direct permission grants within access scopes.
+# Database/ORM: users / user_role_assignments / user_permission_grants /
+#   access_scopes via the auth repositories on the tenant session; org_units
+#   and youtube_channels are read by the current_org_access_index dependency.
+# Standards: thin routes — typed permission gates, role/permission family
+#   authority, and OrgAccessIndex scope containment before any write; typed
+#   repository errors -> 404/409/422/503; audit rows share the request
+#   transaction.
+# Blast Radius: Authorization and audit — every mutating route writes role or
+#   permission state plus its audit row.
+# Connections:
+#   - File: backend/ums_smart_revenue/auth/user_roles.py -> role repository.
+#   - File: backend/ums_smart_revenue/auth/user_permissions.py -> grant repo.
+#   - File: backend/ums_smart_revenue/api/dependencies_finance.py -> org index.
+# ============================================================================
 import logging
 from typing import Annotated
 

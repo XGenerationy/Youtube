@@ -1245,6 +1245,20 @@ def _enqueue_after_commit(
         session.info[_AFTER_COMMIT_FLAG_KEY] = True
 
 
+# ============================================================================
+# Purpose: Activate the reserved executor slot only after the route's audit
+#   commit lands; on activation failure, queue the job_failed_before_start
+#   audit on the executor's tracked audit worker.
+# Database/ORM: Reads nothing directly; the queued audit writes audit_logs on
+#   the audit worker's own session after the request connection releases.
+# Standards: best-effort — failures are cancelled, logged, and audited but
+#   never raised into the request lifecycle; audit submission happens off the
+#   committing session's pool slot.
+# Blast Radius: Connector run lifecycle + audit completeness for accepted 202s.
+# Connections:
+#   - File: backend/ums_smart_revenue/connectors/runs/executor.py ->
+#     activate / cancel_reservation / queue_failed_start_audit.
+# ============================================================================
 def _make_after_commit_handler(executor: ConnectorJobExecutor, reservation: _SlotReservation):
     """Return a hook that activates the reservation after the session commits.
 

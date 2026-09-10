@@ -1,3 +1,15 @@
+# ============================================================================
+# Purpose: Unit tests for the in-process ConnectorJobExecutor — worker session
+#   isolation, registry dedup, reserve/activate/cancel, shutdown audits, and
+#   the tracked audit-pool drain semantics.
+# Database/ORM: Disposable file-backed SQLite via _factory; asserts audit_logs
+#   rows and tenant-context behavior.
+# Standards: Test-only; stubs run_one/_audit_failed_before_start where needed
+#   and asserts typed failure audits instead of exception escapes.
+# Blast Radius: None — test module.
+# Connections:
+#   - File: backend/ums_smart_revenue/connectors/runs/executor.py -> SUT.
+# ============================================================================
 """Unit tests for the in-process ConnectorJobExecutor worker + registry."""
 
 from __future__ import annotations

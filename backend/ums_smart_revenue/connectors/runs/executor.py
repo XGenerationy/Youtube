@@ -265,9 +265,12 @@ class ConnectorJobExecutor:
         self._audit_lock = threading.Lock()
         self._audit_accepting = True
         # _committed keys: reservations whose after_commit hook entered (proof
-        # the request transaction committed). _shutdown_audited keys: jobs that
-        # already have a job_failed_before_start row, so the hook's queue call
-        # and the shutdown sweep can never double-audit one job.
+        # the request transaction committed). _shutdown_audited keys: jobs the
+        # shutdown sweep (or post-close fallback) already wrote a failure row
+        # for, so a late hook queue call can never double-audit one job.
+        # Deliberately NOT populated on a normal queued submit — the same job
+        # key may legitimately fail activation again on a later attempt, and
+        # each failure needs its own audit row.
         self._committed: set[_JobKey] = set()
         self._shutdown_audited: set[_JobKey] = set()
         self._finalizer = weakref.finalize(
@@ -1093,7 +1096,6 @@ class ConnectorJobExecutor:
                         error_class=error_class,
                         actor_identity=actor_identity,
                     )
-                    self._shutdown_audited.add(key)
                 except Exception:  # noqa: BLE001 — best-effort, never escape
                     logger.exception(
                         "Failed to queue job_failed_before_start audit "

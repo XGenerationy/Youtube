@@ -52,7 +52,10 @@ from ums_smart_revenue.connectors.google.errors import (
     OAuthRefreshError,
     SecretFetchError,
 )
-from ums_smart_revenue.connectors.runs.executor import ConnectorJobActor
+from ums_smart_revenue.connectors.runs.executor import (
+    ConnectorJobActor,
+    _SlotReservation,
+)
 from ums_smart_revenue.db.connector_models import ConnectorRunORM
 from ums_smart_revenue.db.org_models import OrgBase
 from ums_smart_revenue.db.report_models import ReportBase
@@ -139,7 +142,7 @@ class _FakeExecutor:
         self.activate_calls: list[dict] = []
         self.cancel_calls: list[dict] = []
         self.queued_audits: list[dict] = []
-        self.committed_marks: list = []
+        self.committed_marks: list[_SlotReservation] = []
         self.closed = False
 
     def has_active_job(self, **kwargs) -> bool:
@@ -166,11 +169,11 @@ class _FakeExecutor:
         self.cancel_calls.append({"reservation": reservation})
         return True
 
-    def mark_reservation_committed(self, reservation):
+    def mark_reservation_committed(self, reservation: _SlotReservation) -> None:
         """Mirror the real executor's committed-mark hook (after_commit entry)."""
         self.committed_marks.append(reservation)
 
-    def queue_failed_start_audit(self, **kwargs):
+    def queue_failed_start_audit(self, **kwargs: object) -> None:
         """Record the deferred failure audit the route queues after commit."""
         self.queued_audits.append(kwargs)
 

@@ -53,6 +53,7 @@ def _is_active_grant_unique_violation(exc: IntegrityError) -> bool:
         )
     )
 
+
 PERMISSION_SCOPE_TYPES: dict[Permission, frozenset[str]] = {
     Permission.VIEW_ANALYTICS: _ORG_SCOPE_TYPES,
     Permission.VIEW_CONFIDENCE: _ORG_SCOPE_TYPES,

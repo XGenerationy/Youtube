@@ -176,7 +176,15 @@ def upgrade() -> None:
 #   - File: tests/db/test_security_role_permission_seed_migration.py -> guards.
 # ============================================================================
 def downgrade() -> None:
-    """Leave the authorization catalog in place; this seed is not reversed."""
+    """Leave the authorization catalog in place; this seed is not reversed.
+
+    Raises:
+        LiveBetaOperatorAssignmentError: when an ACTIVE ``beta_operator``
+            row remains in ``user_role_assignments``, or when the login cannot
+            read that table across row security to prove none remain. The
+            operator revokes/migrates the assignments (or re-runs as a
+            superuser/BYPASSRLS role) and retries the downgrade.
+    """
     # Non-destructive by design: upgrade is insert-missing + metadata refresh, so
     # provenance of canonical pairs cannot be recovered. The catalog stays, but
     # a LIVE beta_operator assignment is a different contract: the parent

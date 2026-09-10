@@ -92,8 +92,8 @@ SEED_SQL_PATH = PROJECT_ROOT / "backend/ums_smart_revenue/db/security_seed.sql"
 # assignment exists (PR #223 review: a stranded assignment makes a rolled-back
 # binary raise PrincipalDataValidationError for that operator). Upgrade logic
 # and the frozen catalog contract are unchanged.
-_HISTORICAL_MIGRATION_GIT_BLOB = "c8b398ffb3d8c1cf0147bef856cb15c983aa7237"
-_HISTORICAL_MIGRATION_SHA256 = "19714d9f65338d473df433847a0269fc92853834118234ae681d411c10e48ff9"
+_HISTORICAL_MIGRATION_GIT_BLOB = "32f758b0fb28a2346da8673d0f0cee9b477e2ef4"
+_HISTORICAL_MIGRATION_SHA256 = "7e756b9dc82169d8be12d3c22e2ebc16478daede76e885e18820b9aef9235aed"
 # Repinned 2026-09-03: whitespace-only reformat of the frozen literal rows
 # (one key per line, <=100 cols) to clear analyzer line-length findings
 # pre-merge; the parsed catalog data is byte-for-data identical (verified

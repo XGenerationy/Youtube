@@ -13,6 +13,7 @@ from ums_smart_revenue.api.dependencies_audit import (
     audit_record_to_api,
     current_atomic_audit_sink,
 )
+from ums_smart_revenue.api.dependencies_finance import current_org_access_index
 from ums_smart_revenue.auth.audit import AuditEventType
 from ums_smart_revenue.auth.audit_service import AuditSink, record_audit_event
 from ums_smart_revenue.auth.models import UserPrincipal
@@ -480,6 +481,7 @@ def assign_user_role(
         Depends(current_user_role_assignment_repository),
     ],
     audit_sink: Annotated[AuditSink, Depends(current_atomic_audit_sink)],
+    org_index: Annotated[OrgAccessIndex, Depends(current_org_access_index)],
 ) -> dict[str, object]:
     """Assign a role to a user within a scope.
 
@@ -488,7 +490,7 @@ def assign_user_role(
     _require_role_assignment_permission(user)
     role = _parse_role_for_policy(payload.role_key)
     target_scope = _parse_scope_for_policy(payload.scope_type, payload.scope_id)
-    _require_role_assignment_policy(user, role, target_scope)
+    _require_role_assignment_policy(user, role, target_scope, org_index)
     try:
         assignment = repository.assign_role(
             user_id=user_id,
@@ -530,6 +532,7 @@ def revoke_user_role(
         Depends(current_user_role_assignment_repository),
     ],
     audit_sink: Annotated[AuditSink, Depends(current_atomic_audit_sink)],
+    org_index: Annotated[OrgAccessIndex, Depends(current_org_access_index)],
 ) -> dict[str, object]:
     """Revoke an active role assignment.
 
@@ -549,7 +552,7 @@ def revoke_user_role(
     existing_scope = _parse_scope_for_policy(
         existing.scope_type, existing.scope_id, stored=True
     )
-    _require_role_assignment_policy(user, existing_role, existing_scope)
+    _require_role_assignment_policy(user, existing_role, existing_scope, org_index)
 
     try:
         assignment = repository.revoke_role(
@@ -588,12 +591,13 @@ def grant_user_permission(
         Depends(current_user_permission_grant_repository),
     ],
     audit_sink: Annotated[AuditSink, Depends(current_atomic_audit_sink)],
+    org_index: Annotated[OrgAccessIndex, Depends(current_org_access_index)],
 ) -> dict[str, object]:
     """Grant a direct permission to a user; enforces family-specific authority rules."""
     _require_role_assignment_permission(user)
     permission = _parse_permission_for_policy(payload.permission_key)
     target_scope = _parse_scope_for_policy(payload.scope_type, payload.scope_id)
-    _require_permission_grant_policy(user, permission, target_scope)
+    _require_permission_grant_policy(user, permission, target_scope, org_index)
     try:
         grant = repository.grant_permission(
             user_id=user_id,
@@ -635,6 +639,7 @@ def revoke_user_permission(
         Depends(current_user_permission_grant_repository),
     ],
     audit_sink: Annotated[AuditSink, Depends(current_atomic_audit_sink)],
+    org_index: Annotated[OrgAccessIndex, Depends(current_org_access_index)],
 ) -> dict[str, object]:
     """Revoke an active permission grant.
 
@@ -654,7 +659,7 @@ def revoke_user_permission(
     existing_scope = _parse_scope_for_policy(
         existing.scope_type, existing.scope_id, stored=True
     )
-    _require_permission_grant_policy(user, permission, existing_scope)
+    _require_permission_grant_policy(user, permission, existing_scope, org_index)
 
     try:
         grant = repository.revoke_permission(
@@ -796,7 +801,10 @@ def _parse_scope_for_policy(
 #   - File: backend/ums_smart_revenue/auth/user_permissions.py -> stored grant scope.
 # ============================================================================
 def _require_role_assignment_policy(
-    user: UserPrincipal, role: RoleKey, target_scope: AccessScope
+    user: UserPrincipal,
+    role: RoleKey,
+    target_scope: AccessScope,
+    org_index: OrgAccessIndex,
 ) -> None:
     """Enforce role-family authority without permitting scoped escalation."""
     if role == RoleKey.SUPER_OWNER and not _has_role(user, RoleKey.SUPER_OWNER):
@@ -817,7 +825,7 @@ def _require_role_assignment_policy(
             detail="Connector Admin assignments require Super Owner",
         )
     if role in FINANCE_ROLE_KEYS and not _has_any_role(
-        user, {RoleKey.FINANCE_ADMIN, RoleKey.SUPER_OWNER}, target_scope
+        user, {RoleKey.FINANCE_ADMIN, RoleKey.SUPER_OWNER}, target_scope, org_index
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -826,7 +834,10 @@ def _require_role_assignment_policy(
 
 
 def _require_permission_grant_policy(
-    user: UserPrincipal, permission: Permission, target_scope: AccessScope
+    user: UserPrincipal,
+    permission: Permission,
+    target_scope: AccessScope,
+    org_index: OrgAccessIndex,
 ) -> None:
     """Enforce permission-family authority and target-scope containment."""
     if permission in SUPER_OWNER_ONLY_PERMISSION_KEYS and not _has_role(user, RoleKey.SUPER_OWNER):
@@ -835,14 +846,14 @@ def _require_permission_grant_policy(
             detail="Administrative permissions require Super Owner",
         )
     if permission in FINANCE_PERMISSION_KEYS and not _has_any_role(
-        user, {RoleKey.FINANCE_ADMIN, RoleKey.SUPER_OWNER}, target_scope
+        user, {RoleKey.FINANCE_ADMIN, RoleKey.SUPER_OWNER}, target_scope, org_index
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Finance permissions require Finance Admin or Super Owner",
         )
     if permission in CONNECTOR_PERMISSION_KEYS and not _has_any_role(
-        user, {RoleKey.CONNECTOR_ADMIN, RoleKey.SUPER_OWNER}, target_scope
+        user, {RoleKey.CONNECTOR_ADMIN, RoleKey.SUPER_OWNER}, target_scope, org_index
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -852,23 +863,37 @@ def _require_permission_grant_policy(
 
 def _has_role(user: UserPrincipal, role: RoleKey) -> bool:
     """Return whether the caller has an active assignment for one role."""
-    return _has_scoped_role(user, role, AccessScope.global_scope())
+    return _has_scoped_role(user, role, AccessScope.global_scope(), OrgAccessIndex())
 
 
-def _has_any_role(user: UserPrincipal, roles: set[RoleKey], target_scope: AccessScope) -> bool:
+def _has_any_role(
+    user: UserPrincipal,
+    roles: set[RoleKey],
+    target_scope: AccessScope,
+    org_index: OrgAccessIndex,
+) -> bool:
     """Return whether the caller has any active assignment in a role set."""
-    return any(_has_scoped_role(user, role, target_scope) for role in roles)
+    return any(
+        _has_scoped_role(user, role, target_scope, org_index) for role in roles
+    )
 
 
-def _has_scoped_role(user: UserPrincipal, role: RoleKey, target_scope: AccessScope) -> bool:
+def _has_scoped_role(
+    user: UserPrincipal,
+    role: RoleKey,
+    target_scope: AccessScope,
+    org_index: OrgAccessIndex,
+) -> bool:
     """Return whether an active role assignment contains the target scope."""
     if user.disabled:
         return False
-    index = OrgAccessIndex()
+    # FIX: the index must be the request's populated OrgAccessIndex; an empty
+    # index makes every cross-scope containment answer False, so a scoped
+    # Finance Admin could never administer inside its own sector/company.
     return any(
         assignment.active
         and assignment.role == role
-        and index.contains(assignment.scope, target_scope)
+        and org_index.contains(assignment.scope, target_scope)
         for assignment in user.role_assignments
     )
 

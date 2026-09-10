@@ -8,8 +8,8 @@
 #   and a new snapshot module instead of redefining this one.
 # Blast Radius: Read-only authorization seed data for the historical revision.
 # Connections:
-#   - File: db/alembic/versions/20260825_0001_security_role_permission_seed.py
-#     -> imports these rows.
+#   - File: backend/ums_smart_revenue/db/alembic/versions/
+#     20260825_0001_security_role_permission_seed.py -> imports these rows.
 # ============================================================================
 """Frozen authorization catalog snapshot for revision 20260825_0001.
 

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 # pylint: disable=too-many-arguments, too-many-positional-arguments
 import logging
-import threading
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
@@ -1242,24 +1241,11 @@ def _enqueue_after_commit(
     on ``session.info``.
     """
     if not session.info.get(_AFTER_COMMIT_FLAG_KEY):
-        event.listen(
-            session,
-            "after_commit",
-            _make_after_commit_handler(
-                executor,
-                reservation,
-                dialect_name=session.get_bind().dialect.name,
-            ),
-        )
+        event.listen(session, "after_commit", _make_after_commit_handler(executor, reservation))
         session.info[_AFTER_COMMIT_FLAG_KEY] = True
 
 
-def _make_after_commit_handler(
-    executor: ConnectorJobExecutor,
-    reservation: _SlotReservation,
-    *,
-    dialect_name: str,
-):
+def _make_after_commit_handler(executor: ConnectorJobExecutor, reservation: _SlotReservation):
     """Return a hook that activates the reservation after the session commits.
 
     If activation fails (e.g. the ThreadPoolExecutor rejects new work
@@ -1279,50 +1265,30 @@ def _make_after_commit_handler(
             executor.cancel_reservation(reservation)
             logger.exception("Failed to activate connector job reservation after commit")
             # Persist a job_failed_before_start audit row so the accepted
-            # 202 has a matching failure row. The original request session
-            # still holds its connection until commit() returns, and the
-            # executor's audit helper opens a FRESH session on the same
-            # engine. On SQLite that engine is a one-slot QueuePool, so a
-            # synchronous audit here would wait out pool_timeout inside the
-            # request and then discard the row — defer it to a thread whose
-            # checkout only waits for this session's imminent release.
-            # On PostgreSQL the pool has capacity, so the audit stays
-            # synchronous: a deferred (daemon) thread could die mid-write
-            # during the very shutdown that made activate() fail, and the
-            # accepted job would lose its failure audit anyway.
-            # The audit remains best-effort: any error is logged, never
-            # raised into the request lifecycle.
-            if dialect_name == "sqlite":
-                threading.Thread(
-                    target=_audit_activation_failure,
-                    args=(executor, reservation, type(exc).__name__),
-                    daemon=True,
-                ).start()
-            else:
-                _audit_activation_failure(
-                    executor, reservation, type(exc).__name__
+            # 202 has a matching failure row. Queue it on the executor's
+            # tracked audit worker rather than writing synchronously: inside
+            # after_commit the request session still holds its pooled
+            # connection, so a fresh-session audit here would block on
+            # pool_timeout (always on the one-slot SQLite engine, and under
+            # pool saturation on PostgreSQL) and then discard the row. The
+            # queued audit's checkout only waits for this session's imminent
+            # release, and executor.close() drains the audit pool during
+            # shutdown so the row is not lost on an untracked thread.
+            try:
+                executor.queue_failed_start_audit(
+                    tenant_id=reservation.tenant_id,
+                    connector_key=reservation.connector_key,
+                    account_id=reservation.account_id,
+                    report_month=reservation.report_month,
+                    error_class=type(exc).__name__,
+                    actor_identity=reservation.actor_identity,
+                )
+            except Exception:  # noqa: BLE001 — best-effort audit
+                logger.exception(
+                    "Failed to persist activation-failure audit for reservation"
                 )
 
     return _after_commit
-
-
-def _audit_activation_failure(
-    executor: ConnectorJobExecutor,
-    reservation: _SlotReservation,
-    error_class: str,
-) -> None:
-    """Persist the activation-failure audit off the request lifecycle."""
-    try:
-        executor.audit_failed_before_start(
-            tenant_id=reservation.tenant_id,
-            connector_key=reservation.connector_key,
-            account_id=reservation.account_id,
-            report_month=reservation.report_month,
-            error_class=error_class,
-            actor_identity=reservation.actor_identity,
-        )
-    except Exception:  # noqa: BLE001 — best-effort audit
-        logger.exception("Failed to persist activation-failure audit for reservation")
 
 
 def _make_after_rollback_handler(executor: ConnectorJobExecutor, reservation: _SlotReservation):

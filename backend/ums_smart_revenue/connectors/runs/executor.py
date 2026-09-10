@@ -175,6 +175,13 @@ class _ActiveJob:
 #   Failures fold into one ``group_sync_job_failed`` row via the fresh-session
 #   ``_audit_group_sync_failure`` sibling.
 #
+#   A dedicated single-worker ``_audit_executor`` carries the route's
+#   post-commit activation-failure audits (``queue_failed_start_audit``):
+#   inside ``after_commit`` the request session still holds its pooled
+#   connection, so a synchronous fresh-session audit would block on
+#   ``pool_timeout`` and drop the row; ``close()`` drains this worker with
+#   ``wait=True`` so the audit outlives the shutdown that triggered it.
+#
 # Database/ORM: opens its own Session via session_factory; run_one writes
 #   connector_runs + audit_logs; the Bucket-A catch writes one CONNECTOR_JOB_RUN
 #   audit row via SqlAlchemyAuditSink on a fresh own session, wrapped in
@@ -233,12 +240,32 @@ class ConnectorJobExecutor:
             max_workers=max_workers,
             thread_name_prefix="ums-connector-job",
         )
+        # A dedicated single-worker pool for the route's post-commit failure
+        # audits. Queueing there removes the audit's session checkout from the
+        # request lifecycle: on SQLite (one-slot engine pool) a synchronous
+        # audit inside after_commit would wait out pool_timeout while the
+        # committing session still holds the connection, and a bare daemon
+        # thread could die mid-write during the very shutdown that made
+        # activate() fail. This worker is tracked and drained by close().
+        self._audit_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="ums-connector-audit",
+        )
         self._finalizer = weakref.finalize(
             self,
-            self._executor.shutdown,
-            wait=False,
-            cancel_futures=True,
+            self._shutdown_pools,
+            self._executor,
+            self._audit_executor,
         )
+
+    @staticmethod
+    def _shutdown_pools(
+        executor: ThreadPoolExecutor,
+        audit_executor: ThreadPoolExecutor,
+    ) -> None:
+        """GC backstop: stop both pools if ``close()`` never ran."""
+        executor.shutdown(wait=False, cancel_futures=True)
+        audit_executor.shutdown(wait=False)
 
     def close(self) -> None:
         """Shut the pool down deterministically (called from the app lifespan).
@@ -249,9 +276,15 @@ class ConnectorJobExecutor:
         Running futures are allowed to finish and deregister themselves; they
         are never audited as pre-start failures. The weakref finalizer remains
         as a GC backstop for paths that bypass ``close()``.
+
+        The audit pool is shut down LAST with ``wait=True`` so route-queued
+        activation-failure audits — accepted jobs whose ``activate()`` failed
+        during this very shutdown — are drained and committed before the
+        process exits instead of dying on an untracked thread.
         """
         self._executor.shutdown(wait=False, cancel_futures=True)
         self._audit_pending_on_shutdown()
+        self._audit_executor.shutdown(wait=True)
         self._finalizer.detach()
 
     def has_active_job(
@@ -867,6 +900,44 @@ class ConnectorJobExecutor:
         finally:
             if token is not None:
                 TENANT_CTX.reset(token)
+
+    def queue_failed_start_audit(
+        self,
+        *,
+        tenant_id: UUID,
+        connector_key: str,
+        account_id: str,
+        report_month: str,
+        error_class: str,
+        actor_identity: ConnectorJobActor,
+    ) -> None:
+        """Queue a ``job_failed_before_start`` audit on the tracked audit worker.
+
+        Called from the route's ``after_commit`` hook when ``activate()``
+        raises. The audit worker's session checkout happens OFF the request
+        lifecycle — on SQLite the committing request session still holds the
+        engine's only pooled connection inside ``after_commit``, so a
+        synchronous audit would wait out ``pool_timeout`` and drop the row;
+        on PostgreSQL a saturated pool produces the same stall under
+        concurrent failures. ``close()`` drains this pool with ``wait=True``
+        so an in-flight audit outlives the shutdown that triggered it. A
+        submit failure after the audit pool closed is logged, never raised.
+        """
+        try:
+            self._audit_executor.submit(
+                self._audit_failed_before_start,
+                tenant_id=tenant_id,
+                connector_key=connector_key,
+                account_id=account_id,
+                report_month=report_month,
+                error_class=error_class,
+                actor_identity=actor_identity,
+            )
+        except Exception:  # noqa: BLE001 — best-effort audit, never escape
+            logger.exception(
+                "Failed to queue job_failed_before_start audit (tenant=%s)",
+                tenant_id,
+            )
 
     def audit_failed_before_start(
         self,

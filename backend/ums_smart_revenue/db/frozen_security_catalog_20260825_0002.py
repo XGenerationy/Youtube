@@ -8,8 +8,8 @@
 #   revision and a new snapshot module instead of redefining this one.
 # Blast Radius: Read-only authorization seed data for the repair revision.
 # Connections:
-#   - File: db/alembic/versions/20260825_0002_beta_operator_authorization_repair.py
-#     -> imports these rows.
+#   - File: backend/ums_smart_revenue/db/alembic/versions/
+#     20260825_0002_beta_operator_authorization_repair.py -> imports these rows.
 # ============================================================================
 """Frozen authorization catalog snapshot for revision 20260825_0002.
 

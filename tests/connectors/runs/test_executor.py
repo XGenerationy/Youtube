@@ -784,10 +784,10 @@ def test_close_drains_activation_failure_audits_queued_mid_teardown(tmp_path) ->
 def test_close_audits_committed_leftover_reservation_as_shutdown(tmp_path, monkeypatch) -> None:
     """A marked-committed reservation whose hook never ran is audited.
 
-    The after_commit hook calls ``mark_reservation_committed`` before
-    ``activate`` — the hook can only run post-commit, so a committed-marked
-    reservation still in the registry at close() is an accepted job whose
-    hook died mid-flight. close() must emit ``job_failed_before_start``
+    The after_commit hook calls ``begin_post_commit`` before ``activate`` —
+    the hook can only run post-commit, so a committed-marked reservation
+    still in the registry at close() is an accepted job whose hook died
+    mid-flight. close() must emit ``job_failed_before_start``
     (ExecutorShutdown) so the 202 keeps its lifecycle edge.
     """
     from ums_smart_revenue.connectors.runs import executor as executor_module
@@ -805,7 +805,9 @@ def test_close_audits_committed_leftover_reservation_as_shutdown(tmp_path, monke
         actor_identity=ACTOR,
     )
     assert reservation is not None
-    executor.mark_reservation_committed(reservation)
+    # The hook entered (committed) but died before activate/end — the
+    # reservation is a leftover close() must audit, not drop.
+    executor.begin_post_commit(reservation)
     executor.close()
 
     with factory() as session:
@@ -863,3 +865,63 @@ def test_close_drops_uncommitted_leftover_reservation_without_audit(tmp_path, mo
     assert not any(
         a.details.get("action") == "job_failed_before_start" for a in audits
     )
+
+
+def test_close_keeps_audit_gate_open_for_hook_past_reservation_removal(tmp_path) -> None:
+    """close() holds the audit pool until a hook's failure audit is queued.
+
+    Regression for the interleaving where activate() has already popped the
+    _SlotReservation from the registry before the hook calls
+    queue_failed_start_audit: the registry alone shows zero pending slots,
+    so only the begin/end_post_commit bracket keeps close() from disabling
+    audit submission mid-hook.
+    """
+    import threading
+
+    factory = _factory(tmp_path)
+    executor = ConnectorJobExecutor(session_factory=factory, max_workers=1, stale_running_hours=6)
+    reservation = executor.submit_if_absent(
+        tenant_id=TENANT,
+        connector_key="youtube_reporting",
+        account_id="acct-1",
+        report_month="2026-03",
+        dry_run=False,
+        triggered_by_user_id=None,
+        actor_identity=ACTOR,
+    )
+    assert reservation is not None
+
+    # Start close() so it enters the grace window with the slot pending,
+    # then run the hook inline: activate raises against the stopped pool,
+    # pops the slot, and the audit is queued while close() is still waiting.
+    closer = threading.Thread(target=executor.close)
+    closer.start()
+
+    executor.begin_post_commit(reservation)
+    try:
+        executor.activate(reservation)
+        raise AssertionError("activate must fail against a stopped pool")
+    except RuntimeError as exc:
+        executor.cancel_reservation(reservation)
+        executor.queue_failed_start_audit(
+            tenant_id=reservation.tenant_id,
+            connector_key=reservation.connector_key,
+            account_id=reservation.account_id,
+            report_month=reservation.report_month,
+            error_class=type(exc).__name__,
+            actor_identity=reservation.actor_identity,
+        )
+    finally:
+        executor.end_post_commit(reservation)
+
+    closer.join(timeout=10)
+    assert not closer.is_alive(), "close() must wait for the in-flight hook"
+
+    with factory() as session:
+        audits = session.scalars(select(AuditLogORM)).all()
+    failure_rows = [
+        a for a in audits if a.details.get("action") == "job_failed_before_start"
+    ]
+    assert len(failure_rows) == 1
+    assert failure_rows[0].details["error_class"] == "RuntimeError"
+    assert failure_rows[0].details["report_month"] == "2026-03"

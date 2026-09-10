@@ -1273,11 +1273,13 @@ def _make_after_commit_handler(executor: ConnectorJobExecutor, reservation: _Slo
 
     def _after_commit(_session: Session) -> None:
         """Activate the reservation, auditing a failure if activation raises."""
-        # Mark first: this hook can only run after the transaction committed,
-        # so the mark is proof the job was accepted — close() audits only
-        # committed leftovers and never invents a failure row for a rolled
-        # back or still-open request.
-        executor.mark_reservation_committed(reservation)
+        # Bracket the whole hook: begin_post_commit proves the transaction
+        # committed (this hook can only run post-commit) and keeps close()'s
+        # audit gate open until the failure audit is queued — activate() pops
+        # the registry slot before the queue call, so the registry alone
+        # cannot cover that window. end_post_commit runs from finally so a
+        # raised path can never wedge the shutdown gate.
+        executor.begin_post_commit(reservation)
         try:
             executor.activate(reservation)
         except Exception as exc:  # noqa: BLE001 — best-effort, never raise
@@ -1291,8 +1293,9 @@ def _make_after_commit_handler(executor: ConnectorJobExecutor, reservation: _Slo
             # pool_timeout (always on the one-slot SQLite engine, and under
             # pool saturation on PostgreSQL) and then discard the row. The
             # queued audit's checkout only waits for this session's imminent
-            # release, and executor.close() drains the audit pool during
-            # shutdown so the row is not lost on an untracked thread.
+            # release, and executor.close() holds the pool open while any
+            # post-commit hook is in flight, then drains it — so the row is
+            # never lost on an untracked thread.
             try:
                 executor.queue_failed_start_audit(
                     tenant_id=reservation.tenant_id,
@@ -1306,6 +1309,8 @@ def _make_after_commit_handler(executor: ConnectorJobExecutor, reservation: _Slo
                 logger.exception(
                     "Failed to persist activation-failure audit for reservation"
                 )
+        finally:
+            executor.end_post_commit(reservation)
 
     return _after_commit
 

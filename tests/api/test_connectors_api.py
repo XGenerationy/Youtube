@@ -143,6 +143,7 @@ class _FakeExecutor:
         self.cancel_calls: list[dict] = []
         self.queued_audits: list[dict] = []
         self.committed_marks: list[_SlotReservation] = []
+        self.ended_hooks: list[_SlotReservation] = []
         self.closed = False
 
     def has_active_job(self, **kwargs) -> bool:
@@ -169,9 +170,13 @@ class _FakeExecutor:
         self.cancel_calls.append({"reservation": reservation})
         return True
 
-    def mark_reservation_committed(self, reservation: _SlotReservation) -> None:
-        """Mirror the real executor's committed-mark hook (after_commit entry)."""
+    def begin_post_commit(self, reservation: _SlotReservation) -> None:
+        """Mirror the real executor's committed-mark + in-flight bracket."""
         self.committed_marks.append(reservation)
+
+    def end_post_commit(self, reservation: _SlotReservation) -> None:
+        """Mirror the real executor's hook-completion bracket."""
+        self.ended_hooks.append(reservation)
 
     def queue_failed_start_audit(self, **kwargs: object) -> None:
         """Record the deferred failure audit the route queues after commit."""

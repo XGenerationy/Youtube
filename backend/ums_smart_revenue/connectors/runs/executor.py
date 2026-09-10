@@ -273,6 +273,12 @@ class ConnectorJobExecutor:
         # each failure needs its own audit row.
         self._committed: set[_JobKey] = set()
         self._shutdown_audited: set[_JobKey] = set()
+        # In-flight post-commit hooks: a hook that called
+        # begin_post_commit but not yet end_post_commit. close() waits on
+        # this AND pending reservations because activate() pops the registry
+        # slot BEFORE the hook queues its failure audit — the registry alone
+        # cannot see that window.
+        self._inflight_hooks = 0
         self._finalizer = weakref.finalize(
             self,
             self._shutdown_pools,
@@ -292,43 +298,53 @@ class ConnectorJobExecutor:
     # Connections:
     #   - File: backend/ums_smart_revenue/api/connectors.py -> hook caller.
     # ========================================================================
-    def mark_reservation_committed(self, reservation: _SlotReservation) -> None:
-        """Record that the reservation's request transaction committed.
-
-        Called by the route's ``after_commit`` hook before ``activate`` — the
-        hook can only run post-commit, so the mark is definitive proof the
-        job was accepted. close() audits only committed leftover reservations
-        as ``ExecutorShutdown``; an unmarked leftover belongs to a still-open
-        or rolled-back transaction and must not gain a failure row.
-        """
+    # ========================================================================
+    # Purpose: Bracket a post-commit hook — begin marks the reservation
+    #   committed and registers the hook as in-flight; end clears both. The
+    #   pair keeps close()'s audit gate open across the whole hook, covering
+    #   the window where activate() has already popped the registry slot but
+    #   the failure audit has not yet been queued.
+    # Database/ORM: None — in-memory lifecycle tracking only.
+    # Standards: end_post_commit runs from the hook's finally so a raised
+    #   hook can never wedge close(); counts stay balanced per reservation.
+    # Blast Radius: Audit completeness — drives close()'s grace loop.
+    # Connections:
+    #   - File: backend/ums_smart_revenue/api/connectors.py -> hook caller.
+    # ========================================================================
+    def begin_post_commit(self, reservation: _SlotReservation) -> None:
+        """Mark the reservation committed and register its hook as in-flight."""
         with self._lock:
             self._committed.add(reservation.key)
+            self._inflight_hooks += 1
+
+    def end_post_commit(self, reservation: _SlotReservation) -> None:
+        """Unregister the hook; the committed mark is released with it."""
+        with self._lock:
+            self._inflight_hooks = max(0, self._inflight_hooks - 1)
+            self._committed.discard(reservation.key)
 
     # ========================================================================
-    # Purpose: Count _SlotReservation registry slots — each is an in-flight
-    #   request whose post-commit hook has not yet resolved the slot.
-    # Database/ORM: None — reads the in-memory registry under _lock.
+    # Purpose: Count unresolved post-commit work — _SlotReservation registry
+    #   slots PLUS hooks currently inside begin/end_post_commit — so close()
+    #   holds its audit gate across the whole hook, including the window where
+    #   activate() already popped the slot but the failure audit is not yet
+    #   queued.
+    # Database/ORM: None — reads the in-memory registry + counter under _lock.
     # Standards: read-only; used by close()'s bounded grace loop.
     # Blast Radius: None detected.
     # Connections:
     #   - File: backend/ums_smart_revenue/connectors/runs/executor.py ->
     #     close() grace loop + _audit_pending_on_shutdown.
     # ========================================================================
-    def _pending_reservations(self) -> int:
-        """Count registry slots still held by a not-yet-activated reservation.
-
-        A ``_SlotReservation`` in the registry means a request committed (or is
-        about to) and its ``after_commit`` hook has not yet activated,
-        cancelled, or failed-audited the slot. close() must not stop accepting
-        audits while any remain, or a committed 202 can lose its
-        ``job_failed_before_start`` row.
-        """
+    def _outstanding_post_commit(self) -> int:
+        """Count pending reservations plus in-flight post-commit hooks."""
         with self._lock:
-            return sum(
+            pending = sum(
                 1
                 for entry in self._registry.values()
                 if isinstance(entry, _SlotReservation)
             )
+            return pending + self._inflight_hooks
 
     # ========================================================================
     # Purpose: GC backstop — stop the worker and audit pools if close() was
@@ -383,19 +399,18 @@ class ConnectorJobExecutor:
         """
         self._executor.shutdown(wait=False, cancel_futures=True)
         # A request can commit and still have its after_commit hook pending
-        # when shutdown begins. Its activate() will now fail and it must queue
-        # the failure audit — give those in-flight hooks a bounded window to
-        # run before the audit pool stops accepting; any reservation that
-        # outlives the grace is audited as ExecutorShutdown below instead of
-        # being dropped silently.
+        # when shutdown begins, and activate() pops the registry slot before
+        # the hook queues its failure audit — the grace wait must cover both
+        # pending reservations and hooks in flight. Anything still unresolved
+        # at the deadline is audited as ExecutorShutdown below.
         deadline = time.monotonic() + _PENDING_HOOK_GRACE_SECONDS
-        while self._pending_reservations() and time.monotonic() < deadline:
+        while self._outstanding_post_commit() and time.monotonic() < deadline:
             time.sleep(0.05)
-        if self._pending_reservations():
+        if self._outstanding_post_commit():
             logger.error(
-                "close() grace expired with %d unactivated reservations; "
-                "auditing them as ExecutorShutdown",
-                self._pending_reservations(),
+                "close() grace expired with %d unresolved post-commit units; "
+                "auditing committed leftovers as ExecutorShutdown",
+                self._outstanding_post_commit(),
             )
         self._audit_pending_on_shutdown()
         # Flip the accepting flag under the lock BEFORE shutdown() so a

@@ -79,6 +79,7 @@ CONNECTOR_PERMISSION_KEYS = frozenset(
     {
         Permission.RUN_CONNECTOR_JOBS,
         Permission.MANAGE_CONNECTORS,
+        Permission.VIEW_CONNECTOR_HEALTH,
         Permission.VIEW_RAW_FILES,
     }
 )

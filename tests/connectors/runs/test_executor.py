@@ -696,3 +696,60 @@ def test_close_audits_queued_jobs_cancelled_by_shutdown(tmp_path) -> None:
     assert not any(a.details.get("report_month") == "2026-03" for a in shutdown_audits)
     # The registry is cleared after shutdown.
     assert executor._registry == {}
+
+
+def test_close_drains_activation_failure_audits_queued_mid_teardown(tmp_path) -> None:
+    """A route-queued audit overlapping close() is accepted and drained.
+
+    ``queue_failed_start_audit`` submits under ``_audit_lock`` while
+    ``close()`` flips ``_audit_accepting`` under the same lock before calling
+    ``shutdown(wait=True)``: a submission that entered first always lands in a
+    live pool and is drained; one that arrives later is rejected cleanly
+    (logged, never raised). Both interleavings are pinned deterministically.
+    """
+    import threading
+
+    factory = _factory(tmp_path)
+    executor = ConnectorJobExecutor(session_factory=factory, max_workers=1, stale_running_hours=6)
+    started = threading.Event()
+    release = threading.Event()
+    completed: list[str] = []
+
+    def _slow_audit(**kwargs):
+        """Block mid-write so close() provably overlaps the queued audit."""
+        started.set()
+        release.wait(timeout=5)
+        completed.append(kwargs["error_class"])
+
+    executor._audit_failed_before_start = _slow_audit  # stub out the DB write
+    try:
+        executor.queue_failed_start_audit(
+            tenant_id=TENANT,
+            connector_key="youtube_reporting",
+            account_id="acct-1",
+            report_month="2026-03",
+            error_class="RuntimeError",
+            actor_identity=ACTOR,
+        )
+        assert started.wait(timeout=5)
+        closer = threading.Thread(target=executor.close)
+        closer.start()
+        release.set()
+        closer.join(timeout=10)
+        assert not closer.is_alive(), "close() must drain the in-flight audit"
+        assert completed == ["RuntimeError"]
+
+        # A submission arriving after close() stops accepting is skipped
+        # cleanly — logged, never raised into the request lifecycle.
+        executor.queue_failed_start_audit(
+            tenant_id=TENANT,
+            connector_key="youtube_reporting",
+            account_id="acct-1",
+            report_month="2026-04",
+            error_class="RuntimeError",
+            actor_identity=ACTOR,
+        )
+        assert completed == ["RuntimeError"]
+    finally:
+        release.set()
+        executor.close()

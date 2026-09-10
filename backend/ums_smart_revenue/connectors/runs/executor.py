@@ -251,6 +251,12 @@ class ConnectorJobExecutor:
             max_workers=1,
             thread_name_prefix="ums-connector-audit",
         )
+        # Serialization between queue_failed_start_audit and close(): a submit
+        # that entered before close() flipped _audit_accepting is guaranteed to
+        # land in the pool before shutdown() is invoked, so it is drained —
+        # never silently rejected mid-teardown.
+        self._audit_lock = threading.Lock()
+        self._audit_accepting = True
         self._finalizer = weakref.finalize(
             self,
             self._shutdown_pools,
@@ -284,6 +290,11 @@ class ConnectorJobExecutor:
         """
         self._executor.shutdown(wait=False, cancel_futures=True)
         self._audit_pending_on_shutdown()
+        # Flip the accepting flag under the lock BEFORE shutdown() so a
+        # queue_failed_start_audit call that already entered submits into a
+        # live pool and is drained by wait=True — never rejected mid-teardown.
+        with self._audit_lock:
+            self._audit_accepting = False
         self._audit_executor.shutdown(wait=True)
         self._finalizer.detach()
 
@@ -924,15 +935,26 @@ class ConnectorJobExecutor:
         submit failure after the audit pool closed is logged, never raised.
         """
         try:
-            self._audit_executor.submit(
-                self._audit_failed_before_start,
-                tenant_id=tenant_id,
-                connector_key=connector_key,
-                account_id=account_id,
-                report_month=report_month,
-                error_class=error_class,
-                actor_identity=actor_identity,
-            )
+            with self._audit_lock:
+                if not self._audit_accepting:
+                    logger.error(
+                        "Dropping job_failed_before_start audit: executor is "
+                        "closing (tenant=%s connector=%s account=%s month=%s)",
+                        tenant_id,
+                        connector_key,
+                        account_id,
+                        report_month,
+                    )
+                    return
+                self._audit_executor.submit(
+                    self._audit_failed_before_start,
+                    tenant_id=tenant_id,
+                    connector_key=connector_key,
+                    account_id=account_id,
+                    report_month=report_month,
+                    error_class=error_class,
+                    actor_identity=actor_identity,
+                )
         except Exception:  # noqa: BLE001 — best-effort audit, never escape
             logger.exception(
                 "Failed to queue job_failed_before_start audit (tenant=%s)",

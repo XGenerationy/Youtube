@@ -860,6 +860,15 @@ def test_handlers_added_after_configuration_and_output_release_are_redacted() ->
     late_logger = logging.getLogger("ums_smart_revenue.late_handler_probe")
     late_logger.setLevel(logging.ERROR)
     late_logger.propagate = False
+    # A prior test's deferred restore-watcher may still hold the dispatch;
+    # let it finish BEFORE capturing the baseline so the postcondition below
+    # stays a strict identity check.
+    for _ in range(100):
+        if getattr(logging.Logger.callHandlers, "__qualname__", "") == (
+            "Logger.callHandlers"
+        ):
+            break
+        time.sleep(0.05)
     original_dispatch = logging.Logger.callHandlers
     configuration = configure_logging(level="ERROR", stream=io.StringIO())
     try:
@@ -891,18 +900,7 @@ def test_handlers_added_after_configuration_and_output_release_are_redacted() ->
     finally:
         restore_logging(configuration)
 
-    # A prior test's deferred restore-watcher can legitimately unwrap one more
-    # level while this test runs (its lease completes asynchronously), so the
-    # acceptable post-states are the dispatch we captured OR the pristine
-    # stdlib function underneath a leaked wrapper — never a NEW redacting one.
-    _current = logging.Logger.callHandlers
-    _current_is_pristine = (
-        getattr(_current, "__module__", None) == "logging"
-        and getattr(_current, "__qualname__", None) == "Logger.callHandlers"
-    )
-    assert _current is original_dispatch or _current_is_pristine, (
-        "restore left an unexpected dispatch installed"
-    )
+    assert logging.Logger.callHandlers is original_dispatch
 
 
 def test_formatter_replaces_a_precached_raw_exception_and_is_idempotent():

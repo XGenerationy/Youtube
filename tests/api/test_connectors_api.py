@@ -72,15 +72,18 @@ from ums_smart_revenue.tenancy.constants import UMS_TENANT_ID
 def _exactly_one(items):
     """Return the SINGLE expected item; dry or surplus iterators fail.
 
-    Consumes the iterator fully: zero matches and any second match both
-    raise, so a fixture that under- or over-provisions cannot pass silently.
+    Consumes exactly one lookahead via a sentinel (never materializes the
+    remaining iterator, so infinite generators cannot hang the suite), and
+    raises AssertionError explicitly so the guard survives ``python -O``.
     """
+    sentinel = object()
     try:
         first = next(items)
     except StopIteration as exc:
         raise AssertionError("expected exactly one item; got none") from exc
-    rest = list(items)
-    assert not rest, f"expected exactly one item; got extras: {rest[:3]}"
+    extra = next(items, sentinel)
+    if extra is not sentinel:
+        raise AssertionError("expected exactly one item; got extras")
     return first
 
 
@@ -194,6 +197,11 @@ class _FakeExecutor:
     def recover_abandoned_submission_intents() -> int:
         """Record that startup recovery ran; the fake recovers nothing."""
         return 0
+
+    @staticmethod
+    def wait_for_shutdown_completion() -> None:
+        """Confirm immediately: the fake owns no worker threads to drain."""
+        return None
 
     def close(self) -> None:
         """Mirror the production executor lifecycle used by app shutdown."""

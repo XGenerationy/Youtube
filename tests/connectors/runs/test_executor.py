@@ -43,15 +43,18 @@ from ums_smart_revenue.tenancy.models import TenantStatus
 def _exactly_one(items):
     """Return the SINGLE expected item; dry or surplus iterators fail.
 
-    Consumes the iterator fully: zero matches and any second match both
-    raise, so a fixture that under- or over-provisions cannot pass silently.
+    Consumes exactly one lookahead via a sentinel (never materializes the
+    remaining iterator, so infinite generators cannot hang the suite), and
+    raises AssertionError explicitly so the guard survives ``python -O``.
     """
+    sentinel = object()
     try:
         first = next(items)
     except StopIteration as exc:
         raise AssertionError("expected exactly one item; got none") from exc
-    rest = list(items)
-    assert not rest, f"expected exactly one item; got extras: {rest[:3]}"
+    extra = next(items, sentinel)
+    if extra is not sentinel:
+        raise AssertionError("expected exactly one item; got extras")
     return first
 
 
